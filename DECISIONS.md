@@ -313,3 +313,34 @@ limit.
 
 **Reversed by** the built-in gaining a weekly-limit wait and surviving a session
 exit, which would leave park with nothing to do.
+
+**Correction, 2026-09-12 — the built-in has never actually armed on this
+machine, so park is not redundant after all.**
+
+D6 was written from the documentation an hour after reading it, and the owner
+said he had never seen automatic continue happen. He was right. Searched every
+transcript on this machine: **zero** occurrences of `continuing automatically`
+or `Automatic continue` outside the session that was quoting the documentation,
+against **20 `five_hour` rejections and 6 `seven_day` ones**. The feature is on
+by default, the installed version is well past the v2.1.234 it requires, and it
+has still never started a wait here.
+
+The documented exclusion that fits is *"Remote Control and agent team teammate
+sessions: Claude Code doesn't start the wait on its own"* — and this machine's
+sessions are Remote-Control connected, which the harness reports when they
+message one another. That is a fit, not a proof: the definitive test is to run
+`/rate-limit-options` at the next limit and see whether the menu offers to start
+a wait, which is the documented manual path for exactly these sessions.
+
+So the conclusion in D6 stands as written about the *feature* and was wrong
+about *this machine*. Park and resume cover the five-hour case here in practice,
+not only the weekly one. Nothing in the decision changes — the gate still must
+never block the continuation prompt, and the marker still must expire on its own
+— because if the built-in ever does arm, all of that is exactly what keeps the
+two from colliding. What changes is the emphasis: park is load-bearing here
+until `/rate-limit-options` shows otherwise.
+
+Twice today a conclusion of mine needed correcting by evidence rather than
+reasoning, both times in this decision's neighbourhood. The lesson worth keeping
+is the cheap one: a documented default is a claim about the software, not about
+the machine in front of you, and the transcripts were one grep away.

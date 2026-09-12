@@ -107,26 +107,32 @@ out gaps under two minutes.
 wake time and the gate expires it, so a session can no longer be left gated with
 no way out — the trap that made a parked session unable to un-park itself.
 
-## Claude Code already waits out a usage limit, and it is on by default
+## Claude Code has a built-in wait, and it has never armed on this machine
 
-Found after building park and resume, which makes them largely redundant for the
-five-hour case. Since v2.1.234, an interactive session on a claude.ai
-subscription shows `Usage limit reached · continuing automatically at 3:45pm ·
-esc to cancel`, waits, and continues the task with its context intact. That is
-better than anything this module can do from outside a session.
+Since v2.1.234, an interactive session on a claude.ai subscription is supposed to
+show `Usage limit reached · continuing automatically at 3:45pm · esc to cancel`,
+wait, and continue with its context intact. On by default.
 
-It does **not** cover: a reset more than 24 hours away, so the weekly limit is
-untouched; Remote Control and agent-team teammate sessions; or a session that
-was exited, since "the wait doesn't restart when you resume the session". Those
-are what park still serves.
+**It has never happened here.** Every transcript on this machine was searched:
+zero occurrences of `continuing automatically` or `Automatic continue` outside
+the session that was quoting the documentation, against **20 `five_hour`
+rejections and 6 `seven_day` ones**. The installed version is well past the
+requirement.
 
-`DECISIONS.md` D6 records how the module gets out of its way — the gate never
-exits non-zero, so it cannot block the continuation prompt, and the marker
-expires on its own so a continuation cannot land on a closed gate.
+The documented exclusion that fits is *"Remote Control and agent team teammate
+sessions: Claude Code doesn't start the wait on its own"*, and this machine's
+sessions are Remote-Control connected. **That is a fit, not a proof.**
 
-**Open for the owner:** whether park and resume stay at all, given how narrow
-that leaves them. The gate-and-handoff half has no built-in equivalent and is
-not in question.
+⇒ **The test worth running:** at the next limit, run `/rate-limit-options` and
+see whether it offers **Wait here, then continue automatically**. That is the
+documented manual path for exactly these sessions, and the answer decides
+whether park and resume are load-bearing here or only cover the weekly case.
+Until then, assume load-bearing.
+
+`DECISIONS.md` D6 and its correction carry this. The module stays out of the
+built-in's way regardless: the gate never exits non-zero so it cannot block the
+continuation prompt, and the parked marker expires on its own so a continuation
+cannot land on a closed gate.
 
 ## What is in the way
 
