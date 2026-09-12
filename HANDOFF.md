@@ -90,11 +90,23 @@ running, and a parked session is always still running — parking ends a turn an
 gates the tools, it exits nothing. The mechanism could only have worked for a
 session that had already exited.
 
-`resume.sh` now starts a **new** session in the parked directory and hands it
-`HANDOFF.md`, watchdogged at 60 seconds. `DECISIONS.md` D4 carries the
-correction. If you see a `com.llmdrive.budget-resume.*` job still listed by
-`launchctl list` long after its time, that is this bug and it is now tested
-against.
+`resume.sh` now **branches on whether the parked session is still alive**. If it
+is — the normal case — it clears the gate and posts a macOS notification, so the
+session continues in one keystroke with its context intact; nothing outside a
+session can type into it, so the person is the nudge. If the session is gone, it
+starts a new one from `HANDOFF.md`, so an unattended overnight park still gets
+picked up. Both paths are watchdogged.
+
+A live test of that fix then found a second fault: `StartCalendarInterval` has
+minute granularity, so every firing was "early" against a wake time recorded to
+the second, and the early path exited — stranding the job, which never fires
+again. `park.sh` now rounds the wake up to a whole minute and `resume.sh` waits
+out gaps under two minutes.
+
+`DECISIONS.md` D4 carries both corrections. **If a parked session's gate is
+never cleared, remove `~/.claude/budget-run/parked-<session-id>` by hand** — a
+parked session cannot un-park itself, because the gate denies the very tools it
+would need.
 
 ## What is in the way
 

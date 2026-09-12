@@ -733,7 +733,10 @@ else
   fi
   PLIST="$PHOME/Library/LaunchAgents/com.llmdrive.budget-resume.sess-1.plist"
   if [ -f "$PLIST" ]; then ok "park.sh wrote the launch agent"; else bad "park.sh wrote the launch agent"; fi
+  # Rounded up to the minute, the same way park.sh does, because that is the
+  # only granularity StartCalendarInterval has.
   WAKE=$((RESET_AT + 300))
+  [ $((WAKE % 60)) -ne 0 ] && WAKE=$((WAKE + 60 - WAKE % 60))
   WANT_H=$(( 10#$(date -r "$WAKE" +%H) )); WANT_M=$(( 10#$(date -r "$WAKE" +%M) ))
   if grep -q "<key>Hour</key><integer>$WANT_H</integer>" "$PLIST" &&
      grep -q "<key>Minute</key><integer>$WANT_M</integer>" "$PLIST"; then
@@ -751,6 +754,25 @@ else
   else
     bad "park.sh sets the gate marker only after launchd accepts the job"
   fi
+  # The wake time it records must be the instant it actually scheduled, which
+  # StartCalendarInterval can only express to the minute. Recording the odd
+  # seconds made resume.sh think every firing was early, and a job that matches
+  # one minute of one day gets no second chance.
+  RECORDED=''
+  while IFS= read -r line; do
+    case $line in WAKE=*) RECORDED=${line#*=} ;; esac
+  done < "$PHOME/.claude/budget-run/parked-sess-1.env"
+  if [ -n "$RECORDED" ] && [ $((RECORDED % 60)) -eq 0 ]; then
+    ok "the wake time it records sits on a whole minute, as the plist does"
+  else
+    bad "the wake time it records sits on a whole minute, as the plist does" "WAKE=$RECORDED"
+  fi
+  if [ -n "$RECORDED" ] && [ "$RECORDED" -ge $((RESET_AT + 300)) ]; then
+    ok "and is never earlier than the reset plus its delay"
+  else
+    bad "and is never earlier than the reset plus its delay" "WAKE=$RECORDED reset=$RESET_AT"
+  fi
+
   OUT="$(park --status)"
   case $OUT in
     *"parked  sess-1"*) ok "park.sh --status lists what is parked" ;;
@@ -781,7 +803,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-group "Resuming — a new session, never --resume, and never unbounded"
+group "Resuming — nudge a live session, relaunch a dead one, never unbounded"
 # ---------------------------------------------------------------------------
 # The regression: the first live firing hung for 35 minutes because
 # `claude --bg --resume <id>` does not return while that session is still
@@ -793,8 +815,15 @@ cat > "$RSTUB/launchctl" <<'STUBEOF'
 #!/bin/bash
 exit 0
 STUBEOF
+# The stub answers `agents --json` from CLAUDE_STUB_ALIVE, so a test can say
+# whether the parked session is still running, and records every other argv so a
+# test can assert the shape of what resume.sh would have launched.
 cat > "$RSTUB/claude" <<'STUBEOF'
 #!/bin/bash
+if [ "$1" = agents ]; then
+  printf '[{"sessionId": "%s"}]\n' "${CLAUDE_STUB_ALIVE:-none}"
+  exit 0
+fi
 printf '%s\n' "$@" > "$CLAUDE_STUB_ARGV"
 [ -n "${CLAUDE_STUB_SLEEP:-}" ] && sleep "$CLAUDE_STUB_SLEEP"
 exit 0
@@ -818,7 +847,31 @@ run_resume() {                 # run_resume SESSION_ID
     >> "$RHOME/.claude/budget-resume.log" 2>&1
 }
 
-rm -f "$CLAUDE_STUB_ARGV"
+# The parked session is STILL ALIVE — the normal case, since parking ends a turn
+# and gates the tools rather than exiting anything. Its context is the expensive
+# thing and must not be thrown away: clear the gate, tell the person, launch
+# nothing.
+rm -f "$CLAUDE_STUB_ARGV"; : > "$RHOME/.claude/budget-resume.log"
+CLAUDE_STUB_ALIVE=sess-alive run_resume sess-alive
+if [ ! -f "$CLAUDE_STUB_ARGV" ]; then
+  ok "a session that is still running is not relaunched"
+else
+  bad "a session that is still running is not relaunched" "$(cat "$CLAUDE_STUB_ARGV" | tr '\n' ' ')"
+fi
+if [ ! -f "$RHOME/.claude/budget-run/parked-sess-alive" ]; then
+  ok "and its gate is cleared, so one keystroke continues it with its context intact"
+else
+  bad "and its gate is cleared, so one keystroke continues it with its context intact"
+fi
+if grep -q "still running" "$RHOME/.claude/budget-resume.log"; then
+  ok "and the log says why nothing was launched"
+else
+  bad "and the log says why nothing was launched" "$(cat "$RHOME/.claude/budget-resume.log")"
+fi
+
+# The parked session is GONE — unattended continuation is still wanted, and
+# HANDOFF.md is what carries the work across.
+rm -f "$CLAUDE_STUB_ARGV"; : > "$RHOME/.claude/budget-resume.log"
 run_resume sess-r1
 if [ -f "$CLAUDE_STUB_ARGV" ]; then
   ARGV="$(cat "$CLAUDE_STUB_ARGV")"
@@ -860,17 +913,33 @@ CLAUDE_STUB_SLEEP=3 run_resume sess-r2
 if grep -q "claude exited 0" "$RLOG"; then ok "a slow start is waited for rather than killed"
 else bad "a slow start is waited for rather than killed" "$(cat "$RLOG")"; fi
 
-# An early firing must leave the job in place and change nothing.
+# A firing too early to be clock jitter starts nothing and leaves the gate shut.
 : > "$RLOG"; rm -f "$CLAUDE_STUB_ARGV"
-ENV3="$RHOME/.claude/budget-run/parked-sess-r3.env"
-touch "$RHOME/.claude/budget-run/parked-sess-r3"
-printf 'SESSION=sess-r3\nCWD=%s\nPROMPT=x\nWAKE=%s\nLABEL=l\nPLIST=\n' \
-  "$RHOME/proj" "$(( $(date +%s) + 600 ))" > "$ENV3"
-HOME="$RHOME" PATH="$RSTUB:$PATH" bash "$ROOT/modules/budget/resume.sh" "$ENV3" >> "$RLOG" 2>&1
+early_fire() {                 # early_fire SESSION SECONDS_EARLY
+  local sid=$1
+  local secs=$2
+  local env="$RHOME/.claude/budget-run/parked-$sid.env"
+  touch "$RHOME/.claude/budget-run/parked-$sid"
+  printf 'SESSION=%s\nCWD=%s\nPROMPT=Read HANDOFF.md\nWAKE=%s\nLABEL=l\nPLIST=\n' \
+    "$sid" "$RHOME/proj" "$(( $(date +%s) + secs ))" > "$env"
+  HOME="$RHOME" PATH="$RSTUB:$PATH" bash "$ROOT/modules/budget/resume.sh" "$env" >> "$RLOG" 2>&1
+}
+early_fire sess-r3 600
 if [ ! -f "$CLAUDE_STUB_ARGV" ] && [ -f "$RHOME/.claude/budget-run/parked-sess-r3" ]; then
-  ok "an early firing starts nothing and leaves the gate closed"
+  ok "a firing too early to be jitter starts nothing and leaves the gate closed"
 else
-  bad "an early firing starts nothing and leaves the gate closed" "$(cat "$RLOG")"
+  bad "a firing too early to be jitter starts nothing and leaves the gate closed" "$(cat "$RLOG")"
+fi
+
+# A firing early by seconds waits it out. Exiting here is what stranded the work
+# on the first live firing: launchd's StartCalendarInterval has minute
+# granularity, so it fires at the top of the minute and never fires again.
+: > "$RLOG"; rm -f "$CLAUDE_STUB_ARGV"
+early_fire sess-r4 4
+if [ -f "$CLAUDE_STUB_ARGV" ]; then
+  ok "a firing early by seconds is waited out rather than abandoned"
+else
+  bad "a firing early by seconds is waited out rather than abandoned" "$(cat "$RLOG")"
 fi
 
 # ---------------------------------------------------------------------------

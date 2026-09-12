@@ -159,6 +159,18 @@ esac
 
 NOW=$(date +%s)
 WAKE=$((RESET + RESUME_DELAY_S))
+
+# Round up to the next whole minute, because StartCalendarInterval only has
+# minute granularity: the plist can say 15:34 but not 15:34:53. Recording the
+# unrounded second made every firing look early to resume.sh, which left the job
+# in place — and a job matching one minute of one day never fires again, so the
+# work was stranded silently. Found by a live firing, not by reading the code.
+# Rounding up rather than down also keeps the wake no earlier than the reset
+# plus its delay, which is the thing the caller actually asked for.
+if [ $((WAKE % 60)) -ne 0 ]; then
+  WAKE=$((WAKE + 60 - WAKE % 60))
+fi
+
 if [ "$WAKE" -le "$NOW" ]; then
   echo "park.sh: the $WINDOW window reset at $(date -r "$RESET" '+%H:%M') already — nothing to park against." >&2
   exit 1

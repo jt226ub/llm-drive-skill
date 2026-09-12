@@ -185,6 +185,40 @@ says the window is fresh, since a meter that looks broken is not a meter.
 Both are covered by regression tests that fail against the committed version:
 the argv assertion catches `--resume`, and the reset case catches `-1%`.
 
+**Second correction, same day — the first correction was too blunt, and a live
+firing found one more fault.**
+
+*It nudges a live session; it only relaunches a dead one.* Replacing the resume
+with an unconditional fresh session threw away the thing worth keeping. A
+session is left open with its context for a reason, and that context is the
+expensive part; starting fresh was chosen because it worked, not because it was
+right. Nothing outside a session can type into it — there is no messaging
+subcommand, `--continue` refuses a session that is still running, and the only
+transport is a private per-session socket this project will not depend on for
+the same reason it would not read the Keychain. So the behaviour now branches on
+a fact rather than a preference: if `claude agents --json` still lists the
+parked session, clear the gate and post a notification, because the person can
+continue it in one keystroke with everything intact; if it is gone, start a new
+session from `HANDOFF.md`, so an unattended overnight park still gets picked up.
+Choosing fresh context stays the person's call — `/clear` and read the handoff —
+which is the right place for it.
+
+*A firing is always early, and exiting stranded the work.* The live test of the
+first correction fired and then refused to act: `woke 49s early — leaving the
+job scheduled`. `StartCalendarInterval` has minute granularity, so it fires at
+the top of the minute while `park.sh` had recorded the wake time to the second;
+every firing was early by the seconds component. Worse, a job matching one
+minute of one day never fires again, so "leave it scheduled" meant the work was
+stranded with nothing to say so — the same silent-failure shape this project
+exists to prevent, arrived at from a new direction. `park.sh` now rounds the
+wake up to a whole minute so the recorded instant is the scheduled one, and
+`resume.sh` waits out a gap of two minutes or less instead of exiting. Only a
+gap too large to be clock jitter leaves the job alone.
+
+The comment that said "launchd fired early, which it should not" was simply
+wrong. It always does. Five regression tests cover this correction and all five
+fail against the version before it.
+
 ---
 
 ## D5 — The contract is the core; everything else is a module in this repository
