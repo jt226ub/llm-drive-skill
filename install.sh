@@ -46,8 +46,14 @@ chmod +x "$CLAUDE_DIR/hooks/drive-mode.sh"
 # The budget module. Its parts go in together and are gated at runtime by
 # $HOME/.claude/budget-mode, the same shape as drive mode: install puts them in
 # place, /budget-on switches them on, and it is on for every session or none.
-cp "$SRC/budget/BUDGET.md" "$SRC/budget/sensor.sh" "$SRC/budget/gate.sh" \
-   "$SRC/budget/park.sh"   "$SRC/budget/resume.sh" "$CLAUDE_DIR/drive-budget/"
+#
+# Source lives in modules/budget/; it installs to $CLAUDE_DIR/drive-budget/.
+# The installed path is deliberately not modules/budget/ to match: it is named
+# in settings.json on every machine that has this, and in the README's checks,
+# so renaming it to tidy the layout would break working installs for nothing.
+cp "$SRC/modules/budget/BUDGET.md" "$SRC/modules/budget/sensor.sh" \
+   "$SRC/modules/budget/gate.sh"   "$SRC/modules/budget/park.sh" \
+   "$SRC/modules/budget/resume.sh" "$CLAUDE_DIR/drive-budget/"
 chmod +x "$CLAUDE_DIR/drive-budget/sensor.sh" "$CLAUDE_DIR/drive-budget/gate.sh" \
          "$CLAUDE_DIR/drive-budget/park.sh"   "$CLAUDE_DIR/drive-budget/resume.sh"
 cp "$SRC/commands/budget-on.md"  "$CLAUDE_DIR/commands/budget-on.md"

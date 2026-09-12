@@ -151,3 +151,49 @@ unattended in the background and can stall on a permission prompt with nobody
 there to answer — `claude agents` lists it and `claude logs <id>` shows what it
 did. Ordering the marker after the bootstrap is what prevents the one failure
 worse than not parking: a session gated shut with nothing coming to wake it.
+
+---
+
+## D5 — The contract is the core; everything else is a module in this repository
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** Budget mode was built as the only addition to the contract, and a
+second addition — delegating work to a model on a third-party API — was being
+designed as a separate project. Two additions with the same shape is the point
+at which the shape should be named.
+
+**Decision.** The drive contract is the core. Everything around it is a module:
+off by default, switched on by its own standing flag, adding context to a turn
+only when its own conditions are met, and living in `modules/<name>/` in this
+repository. `budget/` became `modules/budget/`; `modules/sidecar/DESIGN.md` is
+the second module, designed and not built.
+
+Modules are Claude Code-specific by nature — they read its status line and drive
+its hooks — so none of them touch `skills/drive/SKILL.md`, which stays
+harness-agnostic and ships unchanged to any gateway.
+
+**Rejected.**
+
+- *A separate repository per module.* It would have meant a second installer, a
+  second test suite, a second document, and two projects both wanting the single
+  `statusLine` slot with no agreed owner. The seam between them would have been
+  an accident rather than a design.
+- *Renaming the installed paths to match.* `~/.claude/drive-budget/` is named in
+  `settings.json` on every machine that has this and in the README's own check
+  commands. Renaming it to `~/.claude/modules/budget/` for symmetry would break
+  working installs to tidy a layout nobody reads. The source tree moved; the
+  installed tree did not, and the installer says why at the copy.
+- *`3rdPartyAgents` as the second module's name.* It says what the module does,
+  which is why it belongs in the README headline where people search for it. As
+  a name it fights the convention in three places at once: `/3rdpartyagents-on`
+  as a command, mixed case beside lowercase `budget`, and a leading digit in a
+  path. `sidecar` is one lowercase word like `drive` and `budget`.
+
+**Consequences.** One installer, one test suite, one document, one owner of the
+status line. A module that needs a status line segment gets it through an
+extension point in the budget sensor rather than by competing for the slot.
+Adding a third module is a directory, a flag, two commands and an installer
+stanza. The cost is that this repository now carries design documents for things
+that are not built, which has to be marked plainly — `modules/sidecar/DESIGN.md`
+opens by saying so.

@@ -67,7 +67,7 @@ group "Dependency floor — the whole point of the rewrite"
 # these scripts have no such string.
 AUDIT_TOOLS="jq perl python python3 awk sed node"
 for f in install.sh uninstall.sh lib.sh hooks/drive-mode.sh omniroute/install-omniroute.sh \
-         budget/sensor.sh budget/gate.sh budget/park.sh budget/resume.sh; do
+         modules/budget/sensor.sh modules/budget/gate.sh modules/budget/park.sh modules/budget/resume.sh; do
   found=""
   while IFS= read -r line; do
     line=${line%%#*}
@@ -460,7 +460,7 @@ group "Budget sensor — reading the status line payload"
 # absent, the whole object absent, and no guaranteed key order.
 BHOME="$WORK/bhome"; mkdir -p "$BHOME/.claude"
 sensor() {                     # payload on stdin; prints the status line
-  HOME="$BHOME" bash "$ROOT/budget/sensor.sh"
+  HOME="$BHOME" bash "$ROOT/modules/budget/sensor.sh"
 }
 state_get() {                  # state_get KEY
   local line
@@ -543,7 +543,7 @@ esac
 group "Budget gate — thresholds, allowlist and failing open"
 # ---------------------------------------------------------------------------
 mkdir -p "$BHOME/.claude/drive-budget"
-cp "$ROOT/budget/BUDGET.md" "$BHOME/.claude/drive-budget/BUDGET.md"
+cp "$ROOT/modules/budget/BUDGET.md" "$BHOME/.claude/drive-budget/BUDGET.md"
 NOW_T="$(date +%s)"
 
 set_state() {                  # set_state 5H% 7D% [AGE_SECONDS] [present|absent]
@@ -555,7 +555,7 @@ hook_json() {                  # hook_json TOOL [EXTRA_JSON]
   printf '{"session_id":"sess-1","cwd":"/tmp/proj","tool_name":"%s"%s}' "$1" "${2:-}"
 }
 gate() {                       # gate MODE TOOL [EXTRA_JSON]
-  hook_json "$2" "${3:-}" | HOME="$BHOME" bash "$ROOT/budget/gate.sh" "$1"
+  hook_json "$2" "${3:-}" | HOME="$BHOME" bash "$ROOT/modules/budget/gate.sh" "$1"
 }
 decision() {                   # decision from a PreToolUse result, via python3
   [ "$HAVE_PY" = 1 ] || return 1
@@ -649,7 +649,7 @@ esac
 set_state 99.9 50 10
 mkdir -p "$BHOME/.claude/budget-run"; touch "$BHOME/.claude/budget-run/parked-sess-1"
 assert_eq deny "$(gate tool Read | decision)" "a parked session is closed to every tool"
-OUT="$(printf '{"session_id":"sess-2","tool_name":"Read"}' | HOME="$BHOME" bash "$ROOT/budget/gate.sh" tool | decision)"
+OUT="$(printf '{"session_id":"sess-2","tool_name":"Read"}' | HOME="$BHOME" bash "$ROOT/modules/budget/gate.sh" tool | decision)"
 assert_eq context "$OUT" "but parking one session does not gate another out of writing its own record"
 rm -rf "$BHOME/.claude/budget-run"
 
@@ -669,7 +669,7 @@ rm -f "$BHOME/.claude/budget-config"
 # Every marker the gate asks BUDGET.md for must exist, or a directive silently
 # comes back empty.
 for m in WRAP STOP WEEK_DOC WEEK_STOP SUBAGENT PARKED SCHEMA; do
-  if grep -q "^<!-- @$m -->$" "$ROOT/budget/BUDGET.md"; then ok "BUDGET.md has the @$m section"
+  if grep -q "^<!-- @$m -->$" "$ROOT/modules/budget/BUDGET.md"; then ok "BUDGET.md has the @$m section"
   else bad "BUDGET.md has the @$m section"; fi
 done
 
@@ -690,7 +690,7 @@ STUBEOF
 chmod +x "$LSTUB/launchctl"
 export LAUNCHCTL_LOG="$WORK/launchctl.log"
 
-park() { HOME="$PHOME" PATH="$LSTUB:$PATH" bash "$ROOT/budget/park.sh" "$@"; }
+park() { HOME="$PHOME" PATH="$LSTUB:$PATH" bash "$ROOT/modules/budget/park.sh" "$@"; }
 RESET_AT=$(( $(date +%s) + 3600 ))
 printf 'UPDATED=%s\nRATE_LIMITS=present\nFIVE_H_PCT=99.5\nFIVE_H_RESET=%s\nSEVEN_D_PCT=20\nSEVEN_D_RESET=\n' \
   "$(date +%s)" "$RESET_AT" > "$PHOME/.claude/budget-state"

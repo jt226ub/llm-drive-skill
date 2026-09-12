@@ -21,13 +21,21 @@ installer edits it; both strip its YAML frontmatter with the same rule and ship
 the body verbatim, and the test suite asserts the two paths produce
 byte-identical text.
 
-A second standing mode, [**budget**](#budget-mode--pausing-before-a-rate-limit),
-ships alongside it on Claude Code only. Where drive governs how work is
-finished, budget governs when it has to stop: it watches the subscription's
-5-hour and weekly rate-limit windows and makes the session write its handoff and
-park itself before one is hit. It is Claude-Code-specific by nature — it reads
-Claude Code's own status line and drives Claude Code's own hooks — so it stays
-out of the harness-agnostic contract entirely.
+## Modules
+
+The contract is the core. Around it sit **modules** — Claude Code-specific
+additions, each off by default, each switched on by its own standing flag, each
+adding context to a turn only when its own conditions are met. They stay out of
+the harness-agnostic contract entirely, because they read Claude Code's own
+status line and drive Claude Code's own hooks.
+
+| Module | Switch | What it does | Status |
+| --- | --- | --- | --- |
+| [budget](#budget-mode--pausing-before-a-rate-limit) | `/budget-on` | Watches the subscription's 5-hour and weekly rate-limit windows; makes the session write its handoff and park itself before one is hit. | **built** |
+| sidecar | `/sidecar-on` | Delegates coding work to a model on a third-party API — DeepSeek, Kimi, GLM, anything exposing an Anthropic-shaped endpoint — running inside its own Claude Code session, so it spends that provider's money and none of the subscription's windows. | **design only**, see [`modules/sidecar/DESIGN.md`](modules/sidecar/DESIGN.md) |
+
+Where drive governs *how* work is finished, budget governs *when it has to
+stop*, and sidecar governs *who does it*.
 
 ## Install for Claude Code
 
