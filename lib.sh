@@ -314,19 +314,19 @@ _j_append() {
   return 0
 }
 
-# settings_hook_registered FILE SUBSTRING
-# True when some UserPromptSubmit entry's command contains SUBSTRING. Structural
-# rather than a grep over the whole file, so the script's name appearing
-# anywhere else — another hook event, a path in an unrelated setting — cannot be
-# mistaken for registration.
+# settings_hook_registered FILE SUBSTRING [EVENT]
+# True when some EVENT entry's command contains SUBSTRING (EVENT defaults to
+# UserPromptSubmit). Structural rather than a grep over the whole file, so the
+# script's name appearing anywhere else — another hook event, a path in an
+# unrelated setting — cannot be mistaken for registration.
 settings_hook_registered() {
   local LC_ALL=C
-  local i j cmd
+  local i j cmd event=${3:-UserPromptSubmit}
   _j_load "$1" || return 1
   _j_root || return 1
   _j_get "$_J_ROOT" hooks || return 1
   [ "${JC[_J_VAL>>JBITS]:_J_VAL&JMASK:1}" = '{' ] || return 1
-  _j_get "$_J_VAL" UserPromptSubmit || return 1
+  _j_get "$_J_VAL" "$event" || return 1
   [ "${JC[_J_VAL>>JBITS]:_J_VAL&JMASK:1}" = '[' ] || return 1
   _j_elements "$_J_VAL" || return 1
   local starts=(${_J_ES[@]+"${_J_ES[@]}"}) ends=(${_J_EE[@]+"${_J_EE[@]}"}) n=$_J_N
@@ -345,13 +345,13 @@ settings_hook_registered() {
   return 1
 }
 
-# settings_register_hook FILE COMMAND
-# Add COMMAND as a UserPromptSubmit hook. The file must already exist and hold a
-# JSON object; install.sh writes it whole when it does not. Prints a one-line
-# note about which container it grew.
+# settings_register_hook FILE COMMAND [EVENT]
+# Add COMMAND as an EVENT hook (EVENT defaults to UserPromptSubmit). The file
+# must already exist and hold a JSON object; install.sh writes it whole when it
+# does not. Prints a one-line note about which container it grew.
 settings_register_hook() {
   local LC_ALL=C
-  local file=$1 cmd=$2 esc pad group
+  local file=$1 cmd=$2 event=${3:-UserPromptSubmit} esc pad group
 
   json_escape esc "$cmd" || return 1
   _j_load "$file" || { echo "ERROR: cannot read $file" >&2; return 1; }
@@ -364,9 +364,9 @@ settings_register_hook() {
   if _j_get "$_J_ROOT" hooks; then
     local hooks=$_J_VAL
     [ "${JC[hooks>>JBITS]:hooks&JMASK:1}" = '{' ] || { echo "ERROR: \"hooks\" is not an object." >&2; return 1; }
-    if _j_get "$hooks" UserPromptSubmit; then
+    if _j_get "$hooks" "$event"; then
       local ups=$_J_VAL
-      [ "${JC[ups>>JBITS]:ups&JMASK:1}" = '[' ] || { echo "ERROR: \"UserPromptSubmit\" is not an array." >&2; return 1; }
+      [ "${JC[ups>>JBITS]:ups&JMASK:1}" = '[' ] || { echo "ERROR: \"$event\" is not an array." >&2; return 1; }
       _j_indent_at "$ups"; pad="$_J_INDENT  "
       group=$(_hook_group "$pad" "$esc")
       _j_append "$ups" "$pad" "$group" "$_J_INDENT" || return 1
@@ -374,7 +374,7 @@ settings_register_hook() {
       _j_indent_at "$hooks"; pad="$_J_INDENT  "
       group=$(_hook_group "$pad  " "$esc")
       _j_append "$hooks" "$pad" \
-        "\"UserPromptSubmit\": [
+        "\"$event\": [
 $pad  $group
 $pad]" "$_J_INDENT" || return 1
     fi
@@ -383,7 +383,7 @@ $pad]" "$_J_INDENT" || return 1
     group=$(_hook_group "$pad    " "$esc")
     _j_append "$_J_ROOT" "$pad" \
       "\"hooks\": {
-$pad  \"UserPromptSubmit\": [
+$pad  \"$event\": [
 $pad    $group
 $pad  ]
 $pad}" "$_J_INDENT" || return 1
@@ -408,20 +408,21 @@ $pad}" "$_J_INDENT" || return 1
   return 0
 }
 
-# settings_deregister_hook FILE SUBSTRING
-# Drop every UserPromptSubmit entry whose command contains SUBSTRING, then drop
-# UserPromptSubmit and hooks in turn if that emptied them. Returns 2 when there
-# was nothing to remove, so the caller can stay quiet rather than claim a change.
+# settings_deregister_hook FILE SUBSTRING [EVENT]
+# Drop every EVENT entry whose command contains SUBSTRING (EVENT defaults to
+# UserPromptSubmit), then drop EVENT and hooks in turn if that emptied them.
+# Returns 2 when there was nothing to remove, so the caller can stay quiet
+# rather than claim a change.
 settings_deregister_hook() {
   local LC_ALL=C
-  local file=$1 match=$2 i j cmd hit
+  local file=$1 match=$2 event=${3:-UserPromptSubmit} i j cmd hit
 
   _j_load "$file" || return 1
   _j_root || { echo "ERROR: $file is not a JSON object." >&2; return 1; }
   _j_get "$_J_ROOT" hooks || return 2
   local hooks=$_J_VAL hooks_ms=$_J_MSTART hooks_me=$_J_MEND
   [ "${JC[hooks>>JBITS]:hooks&JMASK:1}" = '{' ] || return 2
-  _j_get "$hooks" UserPromptSubmit || return 2
+  _j_get "$hooks" "$event" || return 2
   local ups=$_J_VAL ups_ms=$_J_MSTART ups_me=$_J_MEND
   [ "${JC[ups>>JBITS]:ups&JMASK:1}" = '[' ] || return 2
 
@@ -464,7 +465,7 @@ settings_deregister_hook() {
     _j_span_end "$ups" || return 1
     cut_end=$((_J + 1))
   else
-    # UserPromptSubmit is now empty: remove the member, and hooks with it if
+    # The event's array is now empty: remove the member, and hooks with it if
     # that was its only one.
     _j_members "$hooks" || return 1
     if [ "$_J_N" -le 1 ]; then
@@ -477,6 +478,99 @@ settings_deregister_hook() {
   fi
 
   _j_set "${JDOC:0:cut_start}$replacement${JDOC:cut_end}"
+
+  _j_root || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }
+  _j_members "$_J_ROOT" || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }
+  _j_write "$file" || return 1
+  return 0
+}
+
+# ---------------------------------------------------------------------------
+# statusLine operations
+#
+# The budget module's sensor is a statusLine command, because the status line's
+# stdin payload is the only place Claude Code publishes rate_limits.* — no hook
+# event carries it. settings.json holds at most one statusLine, so registering
+# ours is a claim on a slot the user may already be using. These functions
+# therefore refuse rather than overwrite, the same stance settings_register_hook
+# takes towards a "hooks" key that is not an object.
+# ---------------------------------------------------------------------------
+
+# settings_statusline_command VARNAME FILE
+# Set VARNAME to the raw source text of statusLine.command, quotes and escapes
+# included. Returns 1 when there is no statusLine, or it is not an object with a
+# command member.
+settings_statusline_command() {
+  local LC_ALL=C
+  local var=$1 file=$2
+  _j_load "$file" || return 1
+  _j_root || return 1
+  _j_get "$_J_ROOT" statusLine || return 1
+  [ "${JC[_J_VAL>>JBITS]:_J_VAL&JMASK:1}" = '{' ] || return 1
+  _j_get "$_J_VAL" command || return 1
+  eval "$var=\${JDOC:_J_VAL:\$((_J_MEND - _J_VAL))}"
+}
+
+# settings_set_statusline FILE COMMAND
+# Add a top-level "statusLine" object running COMMAND. Returns 2 — and changes
+# nothing — when the file already has a statusLine, whether it is ours or
+# someone else's: the caller decides what to say about it.
+settings_set_statusline() {
+  local LC_ALL=C
+  local file=$1 cmd=$2 esc pad existing
+
+  json_escape esc "$cmd" || return 1
+  _j_load "$file" || { echo "ERROR: cannot read $file" >&2; return 1; }
+  _j_root || { echo "ERROR: $file is not a JSON object." >&2; return 1; }
+  if _j_get "$_J_ROOT" statusLine; then return 2; fi
+
+  _j_members "$_J_ROOT" || { echo "ERROR: cannot parse $file" >&2; return 1; }
+  local before=(${_J_KEY[@]+"${_J_KEY[@]}"})
+
+  _j_indent_at "$_J_ROOT"; pad="$_J_INDENT  "
+  _j_append "$_J_ROOT" "$pad" \
+    "\"statusLine\": {
+$pad  \"type\": \"command\",
+$pad  \"command\": \"$esc\"
+$pad}" "$_J_INDENT" || return 1
+
+  _j_set "${JDOC:0:_J_SPLICE_AT}$_J_SPLICE_TEXT${JDOC:_J_SPLICE_AT}"
+
+  # Same verify-before-write gate settings_register_hook uses: re-parse, every
+  # key that was there is still there, and the thing we added is present.
+  _j_root || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }
+  _j_members "$_J_ROOT" || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }
+  local i k found after=(${_J_KEY[@]+"${_J_KEY[@]}"})
+  for k in ${before[@]+"${before[@]}"}; do
+    found=0
+    for i in ${after[@]+"${after[@]}"}; do [ "$i" = "$k" ] && found=1; done
+    [ "$found" = 1 ] || { echo "ERROR: rewrite lost the \"$k\" setting; $file left alone." >&2; return 1; }
+  done
+  case $JDOC in *"$esc"*) ;; *) echo "ERROR: rewrite did not contain the command; $file left alone." >&2; return 1 ;; esac
+
+  _j_write "$file" || return 1
+  return 0
+}
+
+# settings_unset_statusline FILE SUBSTRING
+# Remove the top-level "statusLine" member, but only when its command contains
+# SUBSTRING. Returns 2 when there is no statusLine or it belongs to someone
+# else, so uninstall never takes away a status line it did not install.
+settings_unset_statusline() {
+  local LC_ALL=C
+  local file=$1 match=$2 cmd
+
+  _j_load "$file" || return 1
+  _j_root || { echo "ERROR: $file is not a JSON object." >&2; return 1; }
+  _j_get "$_J_ROOT" statusLine || return 2
+  local sl=$_J_VAL sl_ms=$_J_MSTART sl_me=$_J_MEND
+  [ "${JC[sl>>JBITS]:sl&JMASK:1}" = '{' ] || return 2
+  _j_get "$sl" command || return 2
+  cmd=${JDOC:_J_VAL:$((_J_MEND - _J_VAL))}
+  case $cmd in *"$match"*) ;; *) return 2 ;; esac
+
+  _j_cut_member_span "$sl_ms" "$sl_me" || return 1
+  _j_set "${JDOC:0:_J_CUT_START}${JDOC:_J_CUT_END}"
 
   _j_root || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }
   _j_members "$_J_ROOT" || { echo "ERROR: rewrite did not re-parse; $file left alone." >&2; return 1; }

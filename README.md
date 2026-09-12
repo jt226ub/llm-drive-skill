@@ -21,6 +21,22 @@ installer edits it; both strip its YAML frontmatter with the same rule and ship
 the body verbatim, and the test suite asserts the two paths produce
 byte-identical text.
 
+## Modules
+
+The contract is the core. Around it sit **modules** — Claude Code-specific
+additions, each off by default, each switched on by its own standing flag, each
+adding context to a turn only when its own conditions are met. They stay out of
+the harness-agnostic contract entirely, because they read Claude Code's own
+status line and drive Claude Code's own hooks.
+
+| Module | Switch | What it does | Status |
+| --- | --- | --- | --- |
+| [budget](#budget-mode--pausing-before-a-rate-limit) | `/budget-on` | Watches the subscription's 5-hour and weekly rate-limit windows; makes the session write its handoff and park itself before one is hit. | **built** |
+| sidecar | `/sidecar-on` | Delegates coding work to a model on a third-party API — DeepSeek, Kimi, GLM, anything exposing an Anthropic-shaped endpoint — running inside its own Claude Code session, so it spends that provider's money and none of the subscription's windows. | **design only**, see [`modules/sidecar/DESIGN.md`](modules/sidecar/DESIGN.md) |
+
+Where drive governs *how* work is finished, budget governs *when it has to
+stop*, and sidecar governs *who does it*.
+
 ## Install for Claude Code
 
 ```bash
@@ -36,16 +52,20 @@ To let a Claude Code session do it for you, point it at the repo:
 
 > Clone https://github.com/jt226ub/llm-drive-skill and run ./install.sh
 
-It works two ways once installed:
+It works three ways once installed:
 
 - **`/drive`** — apply the contract to one task, on demand.
 - **`/drive-on`** — standing mode. A `UserPromptSubmit` hook injects the
   contract into *every* prompt, in every session, until `/drive-off`.
+- **`/budget-on`** — [budget mode](#budget-mode--pausing-before-a-rate-limit).
+  Watches the plan's rate-limit windows and makes the session write its handoff
+  and park itself before one is hit, rather than being cut off mid-sentence.
+  Also standing, until `/budget-off`.
 
 ### What gets installed
 
-Four parts, all under `~/.claude` — the skill is the only one that holds
-content; the rest are plumbing.
+Everything goes under `~/.claude`. The contract and the budget directives are
+the only parts that hold content; the rest is plumbing.
 
 | File | Role |
 | --- | --- |
@@ -53,11 +73,114 @@ content; the rest are plumbing.
 | `commands/drive-on.md` | `/drive-on` — creates the `~/.claude/drive-mode` flag. |
 | `commands/drive-off.md` | `/drive-off` — removes the flag. |
 | `hooks/drive-mode.sh` | On each prompt, if the flag exists, injects the contract. |
+| `drive-budget/BUDGET.md` | The budget directives — **single source of truth** for them. |
+| `drive-budget/sensor.sh` | The status line. Publishes the plan's rate-limit windows. |
+| `drive-budget/gate.sh` | Reads them on each prompt and each tool call, and acts. |
+| `drive-budget/park.sh` | Schedules a session's own resume; `--status`, `--cancel`. |
+| `drive-budget/resume.sh` | What the scheduler runs when the window has reset. |
+| `commands/budget-on.md` | `/budget-on` — creates the `~/.claude/budget-mode` flag. |
+| `commands/budget-off.md` | `/budget-off` — removes the flag. |
+| `budget-config` | Thresholds. Written once, never overwritten by a reinstall. |
 
-`install.sh` also registers the hook under `hooks.UserPromptSubmit` in
-`~/.claude/settings.json`. It backs the file up first, merges rather than
-overwrites, and skips the edit entirely if the hook is already registered, so
-re-running is safe and other hooks survive.
+`install.sh` also edits `~/.claude/settings.json`: the drive hook and the budget
+prompt hook under `hooks.UserPromptSubmit`, the budget tool gate under
+`hooks.PreToolUse`, and the sensor as `statusLine`. It backs the file up once
+per run, merges rather than overwrites, and skips anything already registered,
+so re-running is safe and other hooks survive. **An existing `statusLine` is
+never replaced** — install reports it and exits non-zero, because the status
+line is the one slot the sensor needs and taking over someone's own line
+silently is worse than not installing.
+
+## Budget mode — pausing before a rate limit
+
+`/budget-on` makes a session watch the plan's own rate-limit windows and stop on
+its own terms rather than being cut off mid-sentence by a 429. It is a standing
+mode like drive mode: on for every session and every subagent, or off for all of
+them, until `/budget-off`.
+
+| The 5-hour window reaches | What happens |
+| --- | --- |
+| 97% (`WRAP_PCT`) | Stop starting work. Write `HANDOFF.md`, commit it, park the session. |
+| 99% (`STOP_PCT`) | Every tool but the record-writing set is **denied**, and that allowance is capped at 25 calls. |
+| parked | The session schedules its own resume for five minutes after the window resets, and closes completely. |
+
+| The 7-day window reaches | What happens |
+| --- | --- |
+| 90% (`WEEK_DOC_PCT`) | Write the full record now — this limit costs days, not hours. Then carry on. |
+| 97% (`WEEK_STOP_PCT`) | Same hard gate. **No automatic resume**: the reset is days out, too far to schedule against. |
+
+Subagents get a shorter path. At either hard threshold their tool access closes
+outright and they are told to return their findings — a subagent has no record
+to write, and the session that dispatched it does.
+
+### Where the numbers come from
+
+Claude Code publishes plan rate-limit utilisation in exactly one place a local
+script can read: the JSON it pipes to the `statusLine` command.
+
+```json
+"rate_limits": {
+  "five_hour":   { "used_percentage": 23.5, "resets_at": 1738425600 },
+  "seven_day":   { "used_percentage": 41.2, "resets_at": 1738857600 },
+  "spend_limit": { "used_percentage": 62.8, "resets_at": 1740787200 }
+}
+```
+
+So the sensor is a status line: it prints the usage bar you see and writes
+`~/.claude/budget-state` for the gate to read. It costs no tokens, makes no
+network call, and touches no credentials.
+
+The alternatives were checked and rejected. **No hook event carries rate-limit
+data** — not one, per the hooks reference. The transcript's `quotaLimits` record
+is real but only written when a request has *already* been rejected with a 429,
+which is after the work has stopped. `/api/oauth/usage` exists but needs the
+Keychain OAuth token, and a tool that scrapes your credentials to call an
+undocumented endpoint is the wrong foundation for something that runs on every
+prompt.
+
+### Resuming
+
+Parking writes a `launchd` agent that fires `claude --bg --resume <id>` five
+minutes after the window resets, and a per-session marker that shuts the gate.
+The marker is written only after launchd accepts the job, so a session is never
+left gated shut with nothing coming to wake it.
+
+```bash
+~/.claude/drive-budget/park.sh --status               # what is scheduled
+~/.claude/drive-budget/park.sh --cancel --session ID  # drop one
+~/.claude/drive-budget/park.sh --cancel --all         # drop all
+```
+
+`~/.claude/budget-resume.log` is the only record of what the unattended resumes
+did; both `uninstall.sh` and `--cancel` leave it alone.
+
+### Honest limits
+
+- **It reduces the chance of a 429; it does not eliminate it.** The numbers
+  refresh when the status line re-runs, which is on every new assistant message.
+  One very large turn can cross 97% and the wall together, with no message in
+  between for the gate to act on.
+- **`rate_limits` only exists for Claude.ai Pro and Max subscribers** (or behind
+  a gateway with spend limits), and only after the first API response in a
+  session. Until then there is nothing to act on, and the prompt hook says so
+  rather than staying quiet. A session without them — one on an API key or a
+  non-Anthropic endpoint, or any session before its first response — leaves
+  `budget-state` alone rather than overwriting it: the file describes the
+  account, not the session, and a session that cannot see the account's limits
+  has nothing to say about them.
+- **The gate fails open, loudly.** If `budget-state` is missing or over an hour
+  old, tool calls are allowed and the prompt hook reports it every turn. A gate
+  that denied tools over its own bug would be worse than one that does nothing.
+- **Automatic resume is macOS only.** `launchd` is what survives a closed lid
+  and a reboot. Everywhere else `park.sh` refuses and says what is missing; the
+  gate and the record still work.
+- **A resumed session runs unattended in the background.** It can stall on a
+  permission prompt with nobody there to answer. `claude agents` lists it and
+  `claude logs <id>` shows what it did.
+- **The record allowance is shared**, because the window is: two concurrent
+  sessions past the hard threshold draw on the same 25 calls.
+- Percentages are truncated, not rounded, so 96.9% does not trip a 97%
+  threshold. The error is always on the side of acting later.
 
 ## Install for any other LLM
 
@@ -147,13 +270,34 @@ current hook names `jq` in a comment explaining why it no longer uses it, so
 `grep -c jq` returns 1 for both the old and the new script. Run the hook
 instead.
 
+Budget mode is checked the same way — by behaviour, and at the sensor first,
+because everything else depends on it:
+
+```bash
+# Is the sensor reporting? These are the numbers the gate acts on.
+cat ~/.claude/budget-state
+
+# What would the gate do right now?
+printf '{"session_id":"x","tool_name":"Bash"}' | bash ~/.claude/drive-budget/gate.sh prompt
+
+# Is anything scheduled to resume itself?
+~/.claude/drive-budget/park.sh --status
+```
+
+The gate prints `Budget: 5h N% …` when it is working. Silence means the flag is
+off (`~/.claude/budget-mode` — `/budget-on` creates it). `NO USAGE DATA` means
+the sensor is not running: check that `statusLine` in `settings.json` still
+points at `drive-budget/sensor.sh`, and that Claude Code has been restarted
+since it was installed. A `budget-state` file whose `UPDATED` stamp is hours old
+says the same thing.
+
 ## Tests
 
 ```bash
 ./tests/run-tests.sh
 ```
 
-107 assertions. A JSON editor written by hand is only defensible against
+192 assertions. A JSON editor written by hand is only defensible against
 evidence, so the suite covers the shapes a real `settings.json` takes — no
 `hooks` key, `hooks` without `UserPromptSubmit`, an existing foreign entry,
 minified, tab-indented, unicode and quoted prose — and asserts valid JSON out,
@@ -166,6 +310,20 @@ no shipped script invokes any of the tools listed above, and that the hook still
 emits the whole contract with `PATH` set to nothing at all — a direct regression
 guard on the silent failure described above. Verified on bash 3.2.57, the
 version macOS ships as `/bin/bash`; newer bash is untested here.
+
+The budget module is held to the same standard, because it can deny tool calls
+and schedule unattended work. The suite feeds the sensor the payload shapes the
+status line reference says occur — windows in either order, any window
+independently absent, no `rate_limits` at all — and asserts that an absent
+`five_hour` never reads `seven_day`'s number, which would leave the gate silent
+at the wall. It drives the gate through every threshold and asserts what each
+one does: which tools are denied and which are let through, that the record
+allowance is bounded and resets with the window, that a subagent is closed
+outright, that parking one session does not gate another out of writing its own
+record, and that a stale state file leaves the gate **open** with the prompt
+hook saying so. Parking runs against a stubbed `launchctl`, so the suite asserts
+the launch agent's contents and that a refused bootstrap leaves nothing behind,
+without registering a job on the machine running the tests.
 
 `python3` is used for independent JSON validation when present. It is a
 developer convenience only — nothing in the installed product needs it — and
@@ -189,11 +347,15 @@ tight. It currently runs 7,168 characters.
 ./uninstall.sh
 ```
 
-Deletes the four files and the flag, and deregisters the hook from
-`settings.json` (backup written). It removes only the entry naming
-`drive-mode.sh`, leaving other `UserPromptSubmit` hooks in place, and drops the
-`hooks` key only if that emptied it. Earlier backups are left behind
-deliberately.
+Cancels every scheduled resume first, while `park.sh` is still on disk to cancel
+them with — a `launchd` job left behind would fire into a machine with nothing
+to serve it. Then deletes the installed files and both flags, and deregisters
+from `settings.json` (backup written). It removes only the entries naming
+`drive-mode.sh` or `gate.sh`, and a `statusLine` only if its command names our
+`sensor.sh`, leaving anyone else's hooks and status line in place, and drops the
+`hooks` key only if that emptied it. Earlier backups, `budget-config` and
+`budget-resume.log` are left behind deliberately — one holds thresholds you may
+have tuned, the other is the only record of what the unattended resumes did.
 
 ## Where it helps, where it costs
 
