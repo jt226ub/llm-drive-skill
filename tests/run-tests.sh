@@ -1121,6 +1121,10 @@ case "$(sc start --task x)" in
 esac
 
 git -C "$SCHOME/repo" init -q 2>/dev/null
+# A real hook of the repository's own, so the carry-over assertion below has
+# something to carry and cannot pass vacuously.
+printf '#!/bin/sh\nexit 0\n' > "$SCHOME/repo/.git/hooks/pre-commit" 2>/dev/null
+chmod +x "$SCHOME/repo/.git/hooks/pre-commit" 2>/dev/null
 
 # The guard the module rests on. A background worker whose credential the
 # provider rejects does NOT fail: Claude Code retries and falls back to the
@@ -1243,12 +1247,20 @@ if [ -n "${GUARD:-}" ] && [ -x "$GUARD/pre-push" ]; then
   else
     bad "every invocation form a permission rule misses is still refused" "something reached the remote"
   fi
-  # And the repo's own hooks survive, because core.hooksPath replaces the
-  # directory rather than adding to it.
-  if [ -e "$GUARD/pre-commit" ] || [ ! -e "$(git -C "$ROOT" rev-parse --git-path hooks)/pre-commit" ]; then
+  # The repo's own hooks must survive, because core.hooksPath replaces the hooks
+  # directory rather than adding to it. Asserted by following the link to a real
+  # file: the first version of this test asked "does the guard have a pre-commit
+  # OR does the repo lack one", which this repository satisfies trivially, and it
+  # passed while every carried-over link was in fact dangling.
+  if [ -e "$GUARD/pre-commit" ]; then
     ok "the repository's own hooks are carried into the guard directory"
   else
-    bad "the repository's own hooks are carried into the guard directory"
+    bad "the repository's own hooks are carried into the guard directory" "no pre-commit in $GUARD"
+  fi
+  if [ -s "$GUARD/pre-commit" ]; then
+    ok "and the link resolves to the real hook rather than dangling"
+  else
+    bad "and the link resolves to the real hook rather than dangling" "$(ls -l "$GUARD/pre-commit" 2>&1)"
   fi
 else
   skip "every invocation form a permission rule misses is still refused (no guard dir)"

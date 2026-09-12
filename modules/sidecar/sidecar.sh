@@ -345,7 +345,15 @@ Your work will be reviewed as a branch by the session that dispatched you, so co
   # repo's pre-commit lint would silently stop running inside the worker.
   local guard="$RUN/$worker.hooks" repo_hooks
   mkdir -p "$guard" || die "cannot create $guard"
+  # Absolute, because the symlinks live in the guard directory rather than in
+  # the repository: `git rev-parse --git-path hooks` answers relative to the
+  # current directory (".git/hooks" from the root, "../.git/hooks" from a
+  # subdirectory), and a relative target would resolve against the guard
+  # directory and dangle. The first version of this shipped that way and the
+  # test did not catch it, because it asked "does the guard have a pre-commit,
+  # OR does the repo lack one" and this repository lacks one.
   repo_hooks=$(git rev-parse --git-path hooks 2>/dev/null)
+  case $repo_hooks in /*) ;; ?*) repo_hooks="$PWD/$repo_hooks" ;; esac
   if [ -n "$repo_hooks" ] && [ -d "$repo_hooks" ]; then
     for h in "$repo_hooks"/*; do
       [ -f "$h" ] || continue
