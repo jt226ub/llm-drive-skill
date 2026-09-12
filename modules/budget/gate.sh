@@ -173,6 +173,24 @@ if [ -n "$SESSION_ID" ] && [ -f "$RUN/parked-$SESSION_ID" ]; then
   esac
 fi
 
+# A sidecar worker runs on another provider's money and spends none of these
+# windows, so gating it would stop work that costs nothing to continue. It is
+# told what is happening instead, and never denied.
+#
+# The same scan lives in the sidecar module's guard.sh, which is installed
+# standalone and cannot source anything either. Both read the launcher's own
+# records, so they agree by construction rather than by being kept in step.
+WORKER=0
+if [ -n "$SESSION_ID" ] && [ -d "$HOME/.claude/sidecar-run" ]; then
+  for wf in "$HOME/.claude/sidecar-run"/*.env; do
+    [ -f "$wf" ] || continue
+    while IFS= read -r wline || [ -n "$wline" ]; do
+      case $wline in "session=$SESSION_ID") WORKER=1 ;; esac
+    done < "$wf"
+    [ "$WORKER" = 1 ] && break
+  done
+fi
+
 LEVEL=none
 # Parking is one session deciding it is finished, not a statement about the
 # machine, which is why the marker is per session: a second session still has
@@ -191,8 +209,21 @@ elif [ "$SEVEN_D" -ge "$WEEK_DOC_PCT" ]; then
   LEVEL=week_doc
 fi
 
+# A worker is neither gated nor asked to write the session's record: it is told
+# what the orchestrator's situation is, so it does not wait for a reply that
+# cannot come, and then it gets on with the task it was given. This is checked
+# before the subagent branch because a worker's own subagents share its session
+# id and are on the same provider's money.
+if [ "$WORKER" = 1 ]; then
+  case $LEVEL in
+    stop|wrap)          LEVEL=worker_five_hour ;;
+    week_stop|week_doc) LEVEL=worker_weekly ;;
+    parked|subagent)    LEVEL=none ;;
+  esac
+fi
+
 # A subagent at a hard threshold gets told to return, not to write a record.
-if [ -n "$AGENT_ID" ]; then
+if [ "$WORKER" = 0 ] && [ -n "$AGENT_ID" ]; then
   case $LEVEL in stop|week_stop|parked) LEVEL=subagent ;; esac
 fi
 
@@ -255,9 +286,17 @@ _directive() {
     week_stop) text="$(_section WEEK_STOP)"$'\n\n'"$(_section SCHEMA)" ;;
     subagent)  text="$(_section SUBAGENT)" ;;
     parked)    text="$(_section PARKED)" ;;
+    worker_five_hour) text="$(_section WORKER_FIVE_HOUR)" ;;
+    worker_weekly)    text="$(_section WORKER_WEEKLY)" ;;
     *)         return 1 ;;
   esac
   [ -n "$SESSION_ID" ] && text=${text//SESSION_ID/$SESSION_ID}
+  # The worker sections name the moment the orchestrator comes back.
+  local __when
+  __when=$(_hhmm "$FIVE_H_RESET") || __when="its next reset"
+  text=${text//FIVE_HOUR_RESET/$__when}
+  __when=$(_hhmm "$SEVEN_D_RESET") || __when="its next reset"
+  text=${text//SEVEN_DAY_RESET/$__when}
   printf '%s\n' "$text"
 }
 
@@ -301,6 +340,20 @@ _context() {
 
 case $LEVEL in
   none|unknown) exit 0 ;;
+
+  worker_five_hour|worker_weekly)
+    # Never a deny. The worker is spending another provider's money, so there is
+    # nothing here to protect by stopping it. Rate-limited to once every five
+    # minutes for the same reason the wrap warning is: a long run should hear
+    # this, and should not hear it on every tool call.
+    mkdir -p "$RUN" 2>/dev/null
+    LAST=0
+    [ -f "$RUN/warned-$SESSION_ID" ] && read -r LAST < "$RUN/warned-$SESSION_ID"
+    case $LAST in ''|*[!0-9]*) LAST=0 ;; esac
+    [ $((NOW - LAST)) -lt 300 ] && exit 0
+    echo "$NOW" > "$RUN/warned-$SESSION_ID" 2>/dev/null
+    _context "$(_directive)"
+    ;;
 
   wrap|week_doc)
     # A reminder on every tool call would be noise, and the directive already

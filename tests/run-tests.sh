@@ -699,7 +699,42 @@ rm -f "$BHOME/.claude/budget-config"
 
 # Every marker the gate asks BUDGET.md for must exist, or a directive silently
 # comes back empty.
-for m in WRAP STOP WEEK_DOC WEEK_STOP SUBAGENT PARKED SCHEMA; do
+# A sidecar worker spends another provider's money and none of these windows, so
+# gating it would stop work that costs nothing to continue. It is informed and
+# never denied.
+rm -rf "$BHOME/.claude/budget-run" "$BHOME/.claude/sidecar-run"
+mkdir -p "$BHOME/.claude/sidecar-run"
+printf 'worker=w1\nprovider=deepseek\nmodel=deepseek-flash\nsession=sess-1\nrepo=/tmp\n' \
+  > "$BHOME/.claude/sidecar-run/w1.env"
+set_state 99.9 50
+assert_eq context "$(gate tool Task | decision)" "a sidecar worker is never denied at the five-hour limit"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"rate-limited"*"None of this is"*) ok "and is told the window is not its own" ;;
+  *) bad "and is told the window is not its own" "$OUT" ;;
+esac
+case $OUT in
+  *"cannot reply until"*) ok "and when the session that dispatched it can answer again" ;;
+  *) bad "and when the session that dispatched it can answer again" "$OUT" ;;
+esac
+set_state 12.0 99.0
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq context "$(gate tool Task | decision)" "nor at the weekly limit"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"Finish your task"*"do not need to stop"*) ok "at the weekly limit it writes the record but keeps working" ;;
+  *) bad "at the weekly limit it writes the record but keeps working" "$OUT" ;;
+esac
+# And a worker's own subagents are on the same provider's money.
+rm -rf "$BHOME/.claude/budget-run"
+set_state 99.9 50
+assert_eq context "$(gate tool Read ',"agent_id":"ag-1"' | decision)" \
+  "a worker's own subagent is not closed either"
+rm -rf "$BHOME/.claude/sidecar-run" "$BHOME/.claude/budget-run"
+# With the worker records gone it is an ordinary session again, and gated.
+assert_eq deny "$(gate tool Task | decision)" "an ordinary session at the same threshold is still gated"
+
+for m in WRAP STOP WEEK_DOC WEEK_STOP SUBAGENT PARKED SCHEMA WORKER_FIVE_HOUR WORKER_WEEKLY; do
   if grep -q "^<!-- @$m -->$" "$ROOT/modules/budget/BUDGET.md"; then ok "BUDGET.md has the @$m section"
   else bad "BUDGET.md has the @$m section"; fi
 done

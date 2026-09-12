@@ -136,3 +136,39 @@ edit an old entry; supersede it with a new one and mark the old one superseded.
 If the repository already has these files, match the shape they are already in
 rather than the shape above. If it has neither and the session made no decision,
 write `HANDOFF.md` alone — do not create an empty decision log.
+<!-- @WORKER_FIVE_HOUR -->
+## BUDGET: the session that dispatched you is rate-limited
+
+You are a sidecar worker, running on a third-party provider. **None of this is
+your budget** — the limit belongs to the Claude session that gave you this task,
+and nothing you do here consumes it. Your tools are not restricted.
+
+So: **carry on and finish the task.** What changes is only what you should
+expect from the other end.
+
+- That session cannot reply until about **FIVE_HOUR_RESET**. Do not wait on an
+  answer from it, and do not ask it a question you need answered to continue.
+- If you would have asked, decide it yourself and write down what you decided
+  and why, in the commit message or alongside the work. That is what will be
+  reviewed.
+- Commit to your branch as you go rather than at the end, so that whatever you
+  have reached is readable when that session comes back.
+<!-- @WORKER_WEEKLY -->
+## BUDGET: the session that dispatched you is near its weekly limit
+
+You are a sidecar worker, running on a third-party provider. **None of this is
+your budget**, and your tools are not restricted. But the weekly window is the
+expensive one — it returns in days, not hours, and the session that dispatched
+you is close to it.
+
+**Finish your task.** You do not need to stop. What is required is that the work
+is legible to someone picking it up after a long gap:
+
+- Write the record as you go, not at the end: what you changed, what you
+  verified and how, what you did not get to, and anything you took on trust.
+  Put it in `HANDOFF.md` if the repository has one, and in your commit messages
+  either way.
+- That session may not read this until around **SEVEN_DAY_RESET**. Assume the
+  reader has forgotten the context entirely and write for them.
+- Do not wait for a reply, and do not leave the work in a state only you
+  understand.
