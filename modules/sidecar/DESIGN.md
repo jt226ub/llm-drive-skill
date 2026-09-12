@@ -477,12 +477,41 @@ conclusion drawn from that had to be retracted. And DeepSeek's `/user/balance`
 lags — it read `5.00` through several confirmed runs — so it cannot attribute a
 single run either.
 
-**Measured while building**, against a real worker transcript: 1,354,188 cached
-input tokens against 38,252 missed, a **97% cache hit rate**, visible through
-the Anthropic shim as `cache_read_input_tokens`. That answers open question 3
-from the other direction — the earlier probes read zero only because they were
-cold. Caching is real, it is reported, and it is most of why a delegated run
-costs cents.
+**Two corrections to the cost figures**, both prompted by the number failing a
+human sniff test rather than a test suite — *"1 million tokens for such a simple
+request doesn't make sense to me"*, which was right twice over.
+
+*The same response was billed more than once.* A transcript records an assistant
+message repeatedly: **21 usage records against 13 distinct message ids** in the
+run that exposed it. Summing every `"usage":{` therefore roughly doubled the
+figures. `_usage` now counts each message id once, and counts a record carrying
+no id, since dropping it would understate and understating spend is the worse
+direction.
+
+*Summed tokens are not the provider's token count, and printing them invited a
+false comparison.* Against DeepSeek's own dashboard — **11 requests, 55,939
+tokens** — the deduplicated transcript gives 13 responses and 719,487 input
+tokens. The gap is not an error in either: every request re-sends the whole
+conversation, so `cache_read_input_tokens` is that request's *cumulative prefix*
+rather than new tokens, and the per-request trace shows it climbing 38,515 →
+52,767 → … → 57,510 as the conversation grows. Summing it is right for **cost**,
+because those tokens really are billed at the cache-hit rate, and wrong as a
+**total**, because the provider counts unique tokens processed. `collect` now
+prints the cost and the response count and not the summed tokens, and says why.
+
+The cost itself was never far out: 19,142 missed input, 700,345 cached, 2,542
+output prices at **$0.013** for that run, which is what a dozen requests of ~55K
+context on a cheap model should cost.
+
+**The push guard is unproven and is documented as such.** A worker launched with
+`--disallowed-tools "Bash(git push:*)"` pushed to a real remote anyway — checked
+against a bare repository, which received the commit. Anthropic's docs use two
+rule spellings and the space form is untested here, so the flag is still passed
+but nothing claims it blocks. What the module actually relies on is the brief
+telling the worker to hand work back as a branch, and the orchestrator reviewing
+the diff before merging. **[unverified]** whether any rule spelling blocks it.
+Worth settling, because workers told "Commit it. Nothing else." attempted `git
+push` four times each.
 
 ## 11. Open questions
 

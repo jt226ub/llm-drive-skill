@@ -1001,6 +1001,24 @@ printf '{"x":1,"usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache
 assert_eq "16 102 10" "$(sc_fns '_usage miss cached out "'"$WORK/tr.jsonl"'"; echo "$miss $cached $out"')" \
   "token counts survive being returned into the caller's own variable names"
 
+# A transcript records the same assistant message more than once — 21 usage
+# records against 13 distinct ids in the run that exposed this — so summing
+# every "usage" billed several responses twice and the first ledger figures were
+# about double. The number failed a sniff test before any test did: a one-line
+# function does not cost 1.35 million tokens.
+{ printf '{"message":{"id":"msg_A","usage":{"input_tokens":10,"cache_read_input_tokens":100,"output_tokens":7}}}\n'
+  printf '{"message":{"id":"msg_A","usage":{"input_tokens":10,"cache_read_input_tokens":100,"output_tokens":7}}}\n'
+  printf '{"message":{"id":"msg_B","usage":{"input_tokens":1,"cache_read_input_tokens":2,"output_tokens":3}}}\n'
+} > "$WORK/tr-dup.jsonl"
+assert_eq "11 102 10" "$(sc_fns '_usage m c o "'"$WORK/tr-dup.jsonl"'"; echo "$m $c $o"')" \
+  "a response recorded twice is billed once"
+# Dropping an id-less record would understate, and understating spend is worse.
+{ printf '{"message":{"id":"msg_A","usage":{"input_tokens":10,"cache_read_input_tokens":0,"output_tokens":1}}}\n'
+  printf '{"usage":{"input_tokens":5,"cache_read_input_tokens":0,"output_tokens":1}}\n'
+} > "$WORK/tr-noid.jsonl"
+assert_eq "15 0 2" "$(sc_fns '_usage m c o "'"$WORK/tr-noid.jsonl"'"; echo "$m $c $o"')" \
+  "a record with no message id is still counted, since understating spend is worse"
+
 assert_eq "300000 6000 1200000" "$(sc_fns '_price a b c deepseek deepseek-flash; echo "$a $b $c"')" \
   "a price is read out of prices.conf"
 assert_eq 9 "$(sc_fns '_price a b c deepseek nope 2>/dev/null; echo ok' >/dev/null 2>&1; echo $?)" \
@@ -1125,6 +1143,23 @@ if [ -f "$CLAUDE_ARGV" ]; then
   case $ARGV in
     *deepseek-flash*) bad "a provider model id never reaches --model" "$ARGV" ;;
     *) ok "a provider model id never reaches --model, which would kill the session" ;;
+  esac
+  # Workers told "Commit it. Nothing else." attempted git push four times each.
+  # Only the absence of a remote made that harmless; a worker inherits the
+  # orchestrator's permissions, so in a real repository it would have published
+  # unreviewed work unattended.
+  # Asserted as "passed", not as "works". A worker with the colon-form rule
+  # `Bash(git push:*)` pushed to a real remote anyway — verified against a bare
+  # repository, which received the commit — so the flag's effect is UNPROVEN and
+  # the brief below is what this actually relies on. Do not upgrade this wording
+  # without a test that puts a remote in front of a worker and finds it empty.
+  case $ARGV in
+    *'--disallowed-tools Bash(git push'*) ok "a deny rule for push is passed (its effect is unproven — see DESIGN §10c)" ;;
+    *) bad "a deny rule for push is passed" "$ARGV" ;;
+  esac
+  case $ARGV in
+    *"Do not push"*) ok "and the worker is told the shape of the hand-off in words too" ;;
+    *) bad "and the worker is told the shape of the hand-off" "$ARGV" ;;
   esac
 else
   for t in "the credential never reaches claude's command line" "it travels in the environment instead" \

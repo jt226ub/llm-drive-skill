@@ -145,16 +145,38 @@ _price() {
 #
 # cache_creation_input_tokens count as missed input: DeepSeek makes no separate
 # charge for a cache write, so those tokens are simply input that did not hit.
+#
+# ONE RESPONSE IS BILLED ONCE. A transcript records the same assistant message
+# more than once — 21 usage records against 13 distinct message ids in the run
+# that exposed this — so summing every `"usage":{` counted several responses
+# twice and the first ledger figures were about double. Found because the number
+# failed a sniff test: a one-line function does not cost 1.35 million tokens.
+# Each message id is counted once; a record carrying no id is counted, since
+# dropping it would understate, and understating spend is the worse direction.
 _usage() {
-  local __file=$4 __line __rest __n __miss=0 __cached=0 __out=0
+  local __file=$4 __line __rest __id __seen=" " __n __n_resp=0 __miss=0 __cached=0 __out=0
   while IFS= read -r __line || [ -n "$__line" ]; do
     case $__line in *'"usage":{'*) ;; *) continue ;; esac
+    __id=''
+    case $__line in
+      *'"message":{'*)
+        __rest=${__line#*\"message\":\{}
+        case $__rest in
+          *'"id":"'*) __id=${__rest#*\"id\":\"}; __id=${__id%%\"*} ;;
+        esac ;;
+    esac
+    if [ -n "$__id" ]; then
+      case $__seen in *" $__id "*) continue ;; esac
+      __seen="$__seen$__id "
+    fi
+    __n_resp=$((__n_resp + 1))
     __rest=${__line#*\"usage\":\{}
     _field __n "$__rest" input_tokens                && __miss=$((__miss + __n))
     _field __n "$__rest" cache_creation_input_tokens && __miss=$((__miss + __n))
     _field __n "$__rest" cache_read_input_tokens     && __cached=$((__cached + __n))
     _field __n "$__rest" output_tokens               && __out=$((__out + __n))
   done < "$__file"
+  _USAGE_RESPONSES=$__n_resp
   eval "$1=\$__miss"; eval "$2=\$__cached"; eval "$3=\$__out"
 }
 
@@ -272,10 +294,29 @@ cmd_start() {
   # The credential goes in through the environment of this one command and
   # nowhere else: never a file in the repository, never the command line, where
   # it would sit in `ps` for anyone on the machine to read.
+  # The worker hands work back as a branch for the orchestrator to review and
+  # merge. It does not publish it. Both halves of that are here because an
+  # instruction alone was not enough: workers told "Commit it. Nothing else."
+  # attempted `git push` four times each, and only the absence of a remote in
+  # the test repositories made that harmless. A worker inherits the
+  # orchestrator's permissions, so in a real repository it would have succeeded
+  # — pushing unreviewed work straight past the review this module is built
+  # around, and doing it unattended.
+  #
+  # --disallowed-tools takes permission-rule syntax and is additive, so it
+  # denies the push without overriding whatever permissions the user already
+  # has. The brief says the same thing in words, because a worker that knows the
+  # shape of the hand-off writes a better branch than one that keeps hitting a
+  # wall it does not understand.
+  local brief="Your work will be reviewed as a branch by the session that sent you this task, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left.
+
+"
   local out
   out=$(env "$cred_var=$key" ANTHROPIC_BASE_URL="$base" \
         claude --bg --name "$worker" --model "$alias" \
-               --permission-mode "$PERMISSION_MODE" "$TASK" < /dev/null 2>&1) \
+               --permission-mode "$PERMISSION_MODE" \
+               --disallowed-tools "Bash(git push *)" \
+               "$brief$TASK" < /dev/null 2>&1) \
     || die "claude refused to start the worker: $out"
 
   local sid=''
@@ -390,7 +431,17 @@ cmd_collect() {
   _price pm pc po "$provider" "$model"
   micro=$(( miss * pm / 1000000 + cached * pc / 1000000 + out * po / 1000000 ))
   _usd dollars "$micro"
-  echo "$provider/$model  in $miss (+$cached cached)  out $out  ≈ \$$dollars"
+  # Cost, not a token count. Every request re-sends the whole conversation, so
+  # cache_read is that request's cumulative prefix rather than new tokens:
+  # summing it across a run is right for cost — those tokens really are billed,
+  # at the cache-hit rate — and badly misleading as a total, because the
+  # provider's own dashboard counts unique tokens processed. One run read
+  # 700,345 summed cached tokens while DeepSeek reported 55,939 for it, and the
+  # two figures are both correct about different things. Printing the summed
+  # total invited exactly that comparison, so it is not printed.
+  echo "$provider/$model · ${_USAGE_RESPONSES:-?} responses · ≈\$$dollars"
+  echo "  (cost, not a token count: cache reads are billed per request at the"
+  echo "   hit rate, so the provider's dashboard token figure will differ)"
 
   # Append-only, one line per collect. A spend record that gets rewritten is not
   # a record. Collecting the same worker twice would double-count, so each
