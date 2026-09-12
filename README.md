@@ -155,7 +155,11 @@ did; both `uninstall.sh` and `--cancel` leave it alone.
 - **`rate_limits` only exists for Claude.ai Pro and Max subscribers** (or behind
   a gateway with spend limits), and only after the first API response in a
   session. Until then there is nothing to act on, and the prompt hook says so
-  rather than staying quiet.
+  rather than staying quiet. A session without them — one on an API key or a
+  non-Anthropic endpoint, or any session before its first response — leaves
+  `budget-state` alone rather than overwriting it: the file describes the
+  account, not the session, and a session that cannot see the account's limits
+  has nothing to say about them.
 - **The gate fails open, loudly.** If `budget-state` is missing or over an hour
   old, tool calls are allowed and the prompt hook reports it every turn. A gate
   that denied tools over its own bug would be worse than one that does nothing.

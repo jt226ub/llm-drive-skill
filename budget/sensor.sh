@@ -144,19 +144,32 @@ esac
 # reader never sees a half-written file. The status line is cancelled and
 # re-run whenever an update arrives while it is still going, which makes a
 # torn write a matter of when, not if.
+#
+# ONLY WHEN THIS SESSION HAS PLAN LIMITS TO REPORT. budget-state describes the
+# account, not this session, and a session without rate_limits knows nothing
+# about the account — so it must not overwrite what a session that does know
+# wrote. Two real cases make that more than theory: every session's first status
+# line runs before its first API response and so carries no rate_limits, and any
+# session pointed at a non-Anthropic endpoint or an API key never carries them
+# at all. Writing RATE_LIMITS=absent from either would put the gate into its
+# fail-open state while the real numbers were sitting on disk a moment earlier.
+# Leaving the file alone hands the decision to the gate's staleness check, which
+# is the thing that actually knows how old is too old.
 # ---------------------------------------------------------------------------
-TMP="$STATE.tmp.$$"
-{
-  echo "# written by drive-budget sensor.sh — do not edit, it is rewritten constantly"
-  echo "UPDATED=$(date +%s)"
-  echo "RATE_LIMITS=$RATE_LIMITS"
-  echo "FIVE_H_PCT=$FIVE_H_PCT"
-  echo "FIVE_H_RESET=$FIVE_H_RESET"
-  echo "SEVEN_D_PCT=$SEVEN_D_PCT"
-  echo "SEVEN_D_RESET=$SEVEN_D_RESET"
-  echo "SPEND_PCT=$SPEND_PCT"
-  echo "SPEND_RESET=$SPEND_RESET"
-} > "$TMP" 2>/dev/null && mv -f "$TMP" "$STATE" 2>/dev/null || rm -f "$TMP" 2>/dev/null
+if [ "$RATE_LIMITS" = present ]; then
+  TMP="$STATE.tmp.$$"
+  {
+    echo "# written by drive-budget sensor.sh — do not edit, it is rewritten constantly"
+    echo "UPDATED=$(date +%s)"
+    echo "RATE_LIMITS=$RATE_LIMITS"
+    echo "FIVE_H_PCT=$FIVE_H_PCT"
+    echo "FIVE_H_RESET=$FIVE_H_RESET"
+    echo "SEVEN_D_PCT=$SEVEN_D_PCT"
+    echo "SEVEN_D_RESET=$SEVEN_D_RESET"
+    echo "SPEND_PCT=$SPEND_PCT"
+    echo "SPEND_RESET=$SPEND_RESET"
+  } > "$TMP" 2>/dev/null && mv -f "$TMP" "$STATE" 2>/dev/null || rm -f "$TMP" 2>/dev/null
+fi
 
 # ---------------------------------------------------------------------------
 # The line itself

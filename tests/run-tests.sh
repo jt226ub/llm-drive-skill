@@ -493,11 +493,32 @@ assert_eq ""   "$(state_get FIVE_H_PCT)"   "an absent five_hour window stays emp
 assert_eq ""   "$(state_get FIVE_H_RESET)" "an absent five_hour reset stays empty"
 assert_eq 91   "$(state_get SEVEN_D_PCT)"  "the weekly window is still read"
 
+# budget-state describes the account, not one session. A session with no
+# rate_limits knows nothing about the account, so it must leave the file alone —
+# every session's first status line runs before its first API response, and a
+# session on an API key or a non-Anthropic endpoint never has them at all.
+# Overwriting here would put the gate into fail-open while the real numbers were
+# on disk a moment earlier.
+sensor >/dev/null <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},
+ "rate_limits":{"five_hour":{"used_percentage":88.0,"resets_at":1738425600}}}
+PAYLOAD
+BEFORE="$(cat "$BHOME/.claude/budget-state")"
 sensor >/dev/null <<'PAYLOAD'
 {"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},"context_window":{"used_percentage":8}}
 PAYLOAD
-assert_eq absent "$(state_get RATE_LIMITS)"  "no rate_limits is recorded as absent, not as zero"
-assert_eq ""     "$(state_get FIVE_H_PCT)"   "context_window percentages are not mistaken for plan limits"
+assert_eq "$BEFORE" "$(cat "$BHOME/.claude/budget-state")" "a session with no rate_limits leaves budget-state untouched"
+assert_eq 88.0 "$(state_get FIVE_H_PCT)" "so the account's real numbers survive a session that cannot see them"
+
+rm -f "$BHOME/.claude/budget-state"
+sensor >/dev/null <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},"context_window":{"used_percentage":8}}
+PAYLOAD
+if [ -f "$BHOME/.claude/budget-state" ]; then
+  bad "and no state file is invented when there was none"
+else
+  ok "and no state file is invented when there was none"
+fi
 
 OUT="$(sensor <<'PAYLOAD'
 {"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},"context_window":{"used_percentage":8}}

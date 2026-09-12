@@ -49,6 +49,21 @@ API response, which the gate reports rather than treating as zero.
 **Reversed by** a hook event gaining the same fields, which would make the
 status line slot unnecessary.
 
+**Correction, 2026-09-12.** The sensor originally wrote `budget-state` on every
+run, including runs with no `rate_limits` in the payload, where it wrote
+`RATE_LIMITS=absent`. That was wrong in a way the first day's testing did not
+reach: `budget-state` describes the *account*, and a session with no
+`rate_limits` knows nothing about the account, so writing from one destroys what
+a session that does know just wrote. Two real cases hit it — every session's
+first status line runs before its first API response, and any session pointed at
+an API key or a non-Anthropic endpoint never carries the field at all, which a
+planned DeepSeek sidecar would have triggered constantly. The result either way
+is the gate reading `unknown` and failing open with the real numbers on disk a
+moment earlier. The sensor now leaves the file alone unless it has limits to
+report, and the gate's staleness check — which is the part that actually knows
+how old is too old — decides what to do about silence. Reproduced against the
+committed version and covered by a regression test.
+
 ---
 
 ## D2 — The hard threshold denies tools, with an allowlist for writing the record
