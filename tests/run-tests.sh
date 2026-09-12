@@ -1024,7 +1024,7 @@ sc_fns() {
     set -u
     SELF_DIR="'"$ROOT/modules/sidecar"'"; LEDGER="'"$SCHOME/.claude/sidecar-ledger"'"
     die() { echo "die: $1" >&2; exit 9; }
-    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
+    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_price_age()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
     '"$1"'
   '
 }
@@ -1056,6 +1056,24 @@ assert_eq "15 0 2" "$(sc_fns '_usage m c o "'"$WORK/tr-noid.jsonl"'"; echo "$m $
 
 assert_eq "300000 6000 1200000" "$(sc_fns '_price a b c deepseek deepseek-flash; echo "$a $b $c"')" \
   "a price is read out of prices.conf"
+
+# Nothing can fetch prices: the provider's /models returns only id, object and
+# owned_by, and every billing or usage endpoint probed returns 404. So the table
+# is maintained by hand, and its age is the only defence against believing a
+# stale number.
+AGE_SHIPPED="$(sc_fns "_price_age a; echo \$a")"
+case $AGE_SHIPPED in ""|-1|*[!0-9]*) bad "the shipped price table carries a parseable checked date" "got [$AGE_SHIPPED]" ;; *) ok "the shipped price table carries a parseable checked date ($AGE_SHIPPED days)" ;; esac
+SCT="$WORK/prices-stale"; mkdir -p "$SCT"
+/usr/bin/sed 's/^checked .*/checked 2026-01-01/' "$ROOT/modules/sidecar/prices.conf" > "$SCT/prices.conf"
+assert_eq 253 "$(SELF_DIR="$SCT" bash -c '
+  SELF_DIR="'"$SCT"'"; die(){ exit 1; }
+  eval "$(/usr/bin/sed -n "/^_price_age()/,/^}/p" "'"$SC"'")"
+  _price_age a; echo $a')" "an older stamp reports its age in days"
+/usr/bin/sed '/^checked/d' "$SCT/prices.conf" > "$SCT/p2" && mv "$SCT/p2" "$SCT/prices.conf"
+assert_eq -1 "$(SELF_DIR="$SCT" bash -c '
+  SELF_DIR="'"$SCT"'"; die(){ exit 1; }
+  eval "$(/usr/bin/sed -n "/^_price_age()/,/^}/p" "'"$SC"'")"
+  _price_age a; echo $a')" "and a table with no stamp reports unknown rather than fresh"
 assert_eq 9 "$(sc_fns '_price a b c deepseek nope 2>/dev/null; echo ok' >/dev/null 2>&1; echo $?)" \
   "an unpriced model is refused rather than guessed at"
 
@@ -1121,6 +1139,20 @@ case "$(sc start --task x)" in
 esac
 
 git -C "$SCHOME/repo" init -q 2>/dev/null
+
+# One worker at a time, by decision: with one, the orchestrator reviews each
+# result before the next task starts. It was a decision nothing enforced.
+mkdir -p "$SCHOME/.claude/sidecar-run"
+printf 'worker=already-out\nsession=s\n' > "$SCHOME/.claude/sidecar-run/already-out.env"
+rm -f "$CLAUDE_ARGV"
+OUT="$(sc start --task x)"
+case $OUT in
+  *"already out"*"One at a time"*) ok "a second worker is refused while one is still out" ;;
+  *) bad "a second worker is refused while one is still out" "$OUT" ;;
+esac
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "and nothing is launched"; else bad "and nothing is launched"; fi
+rm -f "$SCHOME/.claude/sidecar-run/already-out.env"
+
 # A real hook of the repository's own, so the carry-over assertion below has
 # something to carry and cannot pass vacuously.
 printf '#!/bin/sh\nexit 0\n' > "$SCHOME/repo/.git/hooks/pre-commit" 2>/dev/null

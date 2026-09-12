@@ -508,3 +508,54 @@ model.
 Verified by behaviour rather than by reading the prompt: a worker asked to write
 down what it runs on wrote `deepseek-flash`, where it had previously reported
 `claude-sonnet-5`, and its commit carried no Claude attribution.
+
+---
+
+## D11 — Prices are hand-maintained and dated, because nothing can fetch them
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** The spend figures rest on a price table. The obvious question is
+whether the provider can supply it, and whether a period's cost can be read back
+authoritatively rather than estimated.
+
+**Decision.** The table stays in the repository, carries a `checked` date, and
+`start` says how old it is when that exceeds 30 days — before the credential is
+read or any request is made, so it can be fixed before the run it would
+mis-price. The orchestrator may update the file.
+
+**Rejected — because they do not exist, not because they were weighed.** Probed
+directly: `/models` returns `{id, object, owned_by}` and no prices. Every cost or
+usage shape returns 404 — `/user/cost`, `/user/billing`, `/billing/usage`,
+`/dashboard/billing/subscription`, the OpenAI-style
+`/v1/dashboard/billing/usage?start_date=…&end_date=…`, `/user/balance/history`,
+`/user/usage_summary`. The provider exposes exactly `/models` and `/user/balance`,
+the latter a point-in-time figure. So there is no pricing endpoint to read and no
+period cost to pull; a local estimate against a dated table is not a shortcut,
+it is the only thing available.
+
+**Consequences.** A spend figure is an estimate and is labelled as one. The one
+authoritative money signal left is the balance, which would give real
+month-to-date spend by differencing samples — coarse at $0.01 and laggy, but the
+cap is $80/month where neither matters. Not built yet; it is the remaining piece.
+
+---
+
+## D12 — One worker at a time, enforced rather than intended
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** One worker was decided early, so that the orchestrator reviews each
+result before the next task starts. Nothing enforced it: `start` would launch a
+second alongside the first.
+
+**Decision.** `start` refuses while any worker record exists, and names the
+worker and the command to clear it.
+
+**Rejected.** *Leaving it as a convention.* Two workers means merging unverified
+work from two sources into one tree, which is the thing the review step exists to
+prevent — and a convention that the tool will happily break is not a constraint.
+
+**Consequences.** Parallel delegation needs a deliberate change rather than
+happening by accident. A worker that is stopped without being collected still
+frees the slot, since `stop` removes the record.

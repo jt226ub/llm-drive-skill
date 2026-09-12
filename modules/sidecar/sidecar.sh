@@ -130,10 +130,31 @@ _transcript() {
 # exactly that, because the obvious call is `_usage miss cached out FILE`.
 
 # _price VAR_MISS VAR_CACHED VAR_OUT PROVIDER MODEL
+# _price_age VARNAME — days since the price table was last checked, or -1 when
+# it carries no date. There is nothing to fetch prices from, so the only defence
+# against a stale table is saying how old it is.
+_price_age() {
+  local __p __rest __d __then __now
+  __d=''
+  while read -r __p __rest; do
+    case $__p in checked) __d=${__rest%% *} ;; esac
+  done < "$SELF_DIR/prices.conf"
+  case $__d in
+    ????-??-??) ;;
+    *) eval "$1=-1"; return 1 ;;
+  esac
+  # No date arithmetic in bash, and no python here: seconds since the epoch for
+  # both, through the one date(1) form macOS and GNU agree on well enough.
+  __then=$(date -j -f %Y-%m-%d "$__d" +%s 2>/dev/null) \
+    || __then=$(date -d "$__d" +%s 2>/dev/null) || { eval "$1=-1"; return 1; }
+  __now=$(date +%s)
+  eval "$1=\$(( (__now - __then) / 86400 ))"
+}
+
 _price() {
   local __p __m __i __c __o __found=0
   while read -r __p __m __i __c __o; do
-    case $__p in \#*|'') continue ;; esac
+    case $__p in \#*|''|checked) continue ;; esac
     if [ "$__p" = "$4" ] && [ "$__m" = "$5" ]; then
       eval "$1=\$__i"; eval "$2=\$__c"; eval "$3=\$__o"; __found=1
     fi
@@ -253,6 +274,20 @@ cmd_start() {
   _conf cred_key  "$profile" cred_key    || die "$profile has no cred_key."
   _conf model     "$profile" model       || die "$profile has no model."
   _conf alias     "$profile" model_alias || die "$profile has no model_alias."
+  # Before anything is spent, because it is about configuration rather than the
+  # run, and because the orchestrator can act on it here: nothing can fetch
+  # prices — the provider's /models carries none and every billing endpoint
+  # probed returns 404 — so an unrevisited table is the one input that goes
+  # wrong silently. Said at spawn, it can be fixed before the run it would
+  # mis-price.
+  local age
+  if _price_age age && [ "$age" -gt 30 ]; then
+    echo "sidecar: prices.conf was last checked $age days ago, so every cost figure will be suspect." >&2
+    echo "         There is no pricing endpoint to fetch from, so this table is maintained by hand." >&2
+    echo "         Update $SELF_DIR/prices.conf against the provider's published rates and set its" >&2
+    echo "         \`checked\` date before relying on a figure from this run." >&2
+  fi
+
   _credential key "$cred_key"
   # An empty credential is the one failure that costs real money in the wrong
   # place. Claude Code treats it as no credential at all and falls back to the
@@ -261,6 +296,17 @@ cmd_start() {
   # it as the provider's cheap tokens. It happened: a returned-by-eval helper
   # shadowed its own output variable and shipped an empty string in silence.
   [ -n "$key" ] || die "the credential for $cred_key came back empty. Refusing to launch: an empty credential silently runs the worker on your claude.ai subscription instead of $PROVIDER."
+
+  # One worker at a time, by decision: with one, the orchestrator reviews each
+  # result before the next task starts. Two means merging unverified work from
+  # two sources into one tree, and it was never enforced until now.
+  local existing=''
+  for f in "$RUN"/*.env; do
+    [ -f "$f" ] || continue
+    existing=${f##*/}; existing=${existing%.env}
+    break
+  done
+  [ -z "$existing" ] || die "worker $existing is already out. One at a time, so that each result is reviewed before the next task starts. Collect it, then: \"$SELF_DIR/sidecar.sh\" stop --worker $existing"
 
   git rev-parse --git-dir >/dev/null 2>&1 || die "not in a git repository. The worker hands work back as a branch."
 
