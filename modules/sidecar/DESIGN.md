@@ -327,6 +327,74 @@ Established from first-party documentation or run on this machine:
   streaming, system prompts, thinking and vision supported; `cache_control`,
   document content, and MCP tool use/results not supported.
 
+## 10a. First run against a live provider — 2026-09-12
+
+A temporary DeepSeek key was used to answer the questions that were blocking.
+**The core of the design holds.** Six findings, four of which change what gets
+built.
+
+**It works.** A `claude --bg` session with `ANTHROPIC_BASE_URL` pointed at
+`https://api.deepseek.com/anthropic` started, took a task, created a file with
+the right contents, and did it on DeepSeek's money. The endpoint itself is
+solid: HTTP 200 on all four combinations of `Authorization: Bearer` /
+`x-api-key` against `deepseek-flash` / `claude-sonnet-4-5`, with `claude-*`
+names mapping as documented and thinking blocks in every response.
+
+**Peer messaging reaches it — question 1 answered.** `ListAgents` from an
+Anthropic session listed `ds-worker [482c2d] · bg · busy` alongside ordinary
+sessions, and a `SendMessage` to it arrived: the worker's own log shows
+`› Message from @llm-drive-skill-88: Probe from the orchestrator…` in its input.
+**Delivery is proved; the reply leg is not**, because the worker never got to
+process the message (see below). The two-way story rests on a round trip that
+has still only been seen in one direction.
+
+**Do not set `ANTHROPIC_MODEL` to a provider model id.** Claude Code validates
+model names against its own catalog before the request goes anywhere. A bare
+`ANTHROPIC_MODEL=deepseek-flash` killed the first session outright — *"There's
+an issue with the selected model (deepseek-flash). It may not exist or you may
+not have access to it."* — even though that exact id returns 200 from the
+endpoint by curl. `ANTHROPIC_MODEL='deepseek-flash[1m]'` survives the main turn
+but still fails the catalog check on auxiliary calls
+(`[claude-code:unrecognized_model]` … `"query_source":"generate_session_title"`).
+**The launcher passes `--model sonnet` and lets the provider's own mapping do
+the translation.** That runs clean. The cost is cosmetic: the UI, and any commit
+the worker writes, will say Sonnet.
+
+**The cost figure is wrong by about 35×, measured.** A probe reporting
+`total_cost_usd: 0.1133` for 22,655 input tokens was priced at Claude list
+rates; at DeepSeek Flash's $0.14/M the same call is about $0.003. This was
+predicted from `modelPricing` being managed-scope and is now measured. The
+ledger must compute cost itself.
+
+**The transcript's model field cannot be trusted to name the real model.** One
+run recorded `"model":"deepseek-flash"`, another `"model":"claude-sonnet-5"`,
+for the same provider. So the ledger takes provider and model from the launcher,
+which knows, rather than reading them back from the transcript. Token counts
+still come from the transcript.
+
+**`/user/balance` is not a ledger.** It still read `5.00` after the probes —
+too coarse and too lagging to meter against a monthly cap. Another reason the
+count is ours.
+
+**The unattended-stall failure is real, and it is the first thing to design
+against.** The worker finished the file and then blocked on a permission prompt
+for `git add && git commit` with nobody to answer, which also stopped it
+draining the queued cross-session message. `--permission-mode acceptEdits`
+covers the write and not the commit. Whatever the launcher passes has to cover
+the *whole* task including the commit, or the worker has to be told not to
+commit at all and hand the diff back instead — which suits the worktree hand-off
+in §2 better anyway.
+
+**Unplanned but welcome:** the worker put its work in a git worktree of its own
+accord (`.claude/worktrees/inherited-noodling-kazoo`), which is the shape §2
+asks for. Worth checking whether that is Claude Code's own behaviour for
+background sessions before building machinery to force it.
+
+**Also confirmed live:** the budget sensor ran inside the DeepSeek session and
+printed `deepseek-flash · worker · no plan limits in this session` — the fix
+from earlier today working in exactly the case it was written for, on a real
+non-subscription session rather than a synthetic payload.
+
 ## 11. Open questions
 
 Everything that was open in the first two drafts is now settled: one repository
@@ -337,20 +405,23 @@ secrets live.
 What is left is not design but evidence, and none of it can be gathered without
 a provider key:
 
-1. **Does a session on a non-Anthropic endpoint participate in peer messaging?**
-   The transport is a local socket and model-independent, so it should — but the
-   worker's model has to choose to call `SendMessage`, and a cheaper model may
-   need that spelled out. This is the first thing to test, because the whole
-   two-way story rests on it. If it fails, the module still works as
-   request/response delegation and the design loses one row of §5.
+1. **Does the worker reply?** Delivery to it is proved (§10a); the return leg is
+   not. A cheaper model has to *choose* to call `SendMessage`, and may need that
+   spelled out in its prompt. Test it against a worker that is not blocked on a
+   permission prompt. If the reply leg fails, the module still works as
+   request/response delegation and §5 loses a row.
 2. **Does Claude Code render MCP progress notifications in the tool panel?** If
    it does, live progress comes free. If not, `claude attach` is the way to
    watch. Either way the delegate must emit them or the call is aborted.
-3. **What is the real cache hit rate**, and does the Anthropic shim surface
-   DeepSeek's hit/miss counts as `cache_read_input_tokens`? The ledger's accuracy
-   and most of the cost argument depend on this.
-4. **Do the other providers' endpoints behave?** Only DeepSeek is verified from
-   first-party documentation.
+3. **Does the Anthropic shim surface DeepSeek's cache hit/miss counts?** Both
+   probes reported `cache_creation_input_tokens: 0` and
+   `cache_read_input_tokens: 0` — but both were cold, so a miss is exactly what
+   should have happened and nothing is settled. Re-run against a warm prefix. If
+   the shim reports zeros regardless, the caching may still be happening and
+   billing cheaper while being invisible to us, and the ledger will overstate.
+4. **Does the worktree happen on its own?** The probe worker made one unprompted.
+   Find out whether that is Claude Code's default for background sessions before
+   building anything to force it.
+5. **Do the other providers' endpoints behave?** Only DeepSeek has been run.
 
-The first build should answer 1 and 2 before anything else is written, because
-both change what the module is rather than how well it works.
+None of these change the topology. The build can start.
