@@ -33,7 +33,10 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LABEL_PREFIX=com.llmdrive.budget-resume
 
 RESUME_DELAY_S=300
-DEFAULT_PROMPT="The rate-limit window has reset and this session was resumed automatically. Re-read HANDOFF.md in this repository and continue from its next-step section. Confirm what you are picking up before you start."
+# Written for a FRESH session, not a resumed one — see the correction in
+# resume.sh. The parked session is still alive and gated; this prompt starts a
+# new one beside it, and HANDOFF.md is the only thing carrying the work across.
+DEFAULT_PROMPT="A rate-limit window has reset, and this session was started automatically to pick up work that stopped when the previous window ran out. Read HANDOFF.md in this repository and continue from its next-step section. Say what you are picking up before you start."
 
 SESSION=''; CWD=''; WINDOW=five_hour; PROMPT=''; ACTION=park; ALL=0
 

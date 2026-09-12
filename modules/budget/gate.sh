@@ -189,8 +189,15 @@ _status_line() {
     fi
     return
   fi
-  t="Budget: 5h ${FIVE_H}%"
-  local r; r=$(_hhmm "$FIVE_H_RESET") && t="$t (resets $r)"
+  # A window Claude Code has dropped because it just reset reads as -1 here, and
+  # printing "5h -1%" is worse than printing nothing: it looks like a bug in the
+  # meter rather than an empty window. Say the window is fresh instead.
+  if [ "$FIVE_H" -lt 0 ]; then
+    t="Budget: 5h window fresh"
+  else
+    t="Budget: 5h ${FIVE_H}%"
+    local r; r=$(_hhmm "$FIVE_H_RESET") && t="$t (resets $r)"
+  fi
   [ "$SEVEN_D" -ge 0 ] && t="$t · 7d ${SEVEN_D}%"
   echo "$t"
 }

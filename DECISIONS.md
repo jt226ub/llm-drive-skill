@@ -152,6 +152,39 @@ there to answer — `claude agents` lists it and `claude logs <id>` shows what i
 did. Ordering the marker after the bootstrap is what prevents the one failure
 worse than not parking: a session gated shut with nothing coming to wake it.
 
+**Correction, 2026-09-12 — it resumes nothing; it starts a new session.** The
+first live firing scheduled two jobs, both fired at 14:45:05 exactly on time,
+and both then hung for thirty-five minutes without logging an exit or removing
+their launch agents. The scheduling half of this decision was right; the resume
+half was wrong at the level of the idea.
+
+`claude --bg --resume <id>` does not return while that session is still running.
+And a parked session *is* still running: parking ends a turn and gates the
+tools, it does not exit anything, so an interactive session is idle-but-alive at
+wake time and "already running" is the normal case rather than an edge one. The
+mechanism could only ever have worked for a session that had exited, which is
+not the case it was built for. Measured on this machine afterwards:
+`claude --bg "<prompt>"` on a fresh session returns in 0s with exit 0 and no
+TTY, while the same command with `--resume` against a live session never returns
+at all.
+
+So the resume starts a **new** session in the parked directory and hands it
+`HANDOFF.md`, which is what the gate already forces the session to write before
+parking and is the only thing that needed to cross the gap. The parked session
+stays gated and untouched. This is also simply better: a fresh session reading a
+written brief beats the exhausted context that hit the wall in the first place,
+and the session id is no longer load-bearing for anything but the marker.
+
+Two smaller things came out of the same failure. Nothing launchd starts may be
+unbounded, so the call is now watchdogged at 60 seconds and killed with a log
+line if it overruns — a job that hangs forever is worse than one that fails,
+because it fails silently. And the gate printed `5h -1%` on the reset, because a
+window Claude Code has dropped yields -1 from the whole-percent helper; it now
+says the window is fresh, since a meter that looks broken is not a meter.
+
+Both are covered by regression tests that fail against the committed version:
+the argv assertion catches `--resume`, and the reset case catches `-1%`.
+
 ---
 
 ## D5 — The contract is the core; everything else is a module in this repository

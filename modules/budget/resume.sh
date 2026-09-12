@@ -52,13 +52,43 @@ rm -f "$RUN/parked-$SESSION" "$RUN/calls" "$RUN/warned"
 PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 CLAUDE=$(command -v claude 2>/dev/null)
 if [ -z "$CLAUDE" ]; then
-  log "resume: cannot find the claude binary on PATH — session $SESSION was NOT resumed."
-  log "resume: the gate has been cleared, so resuming it by hand will work: claude --resume $SESSION"
+  log "resume: cannot find the claude binary on PATH — nothing was started for $SESSION."
+  log "resume: the gate has been cleared, so picking the work up by hand will work."
 else
   cd "$CWD" 2>/dev/null || log "resume: cannot cd to '$CWD', starting in $PWD instead"
-  log "resume: starting session $SESSION in $PWD"
-  "$CLAUDE" --bg --resume "$SESSION" "$PROMPT" 2>&1
-  log "resume: claude exited $?"
+  log "resume: starting a new session in $PWD for the work parked as $SESSION"
+
+  # A NEW SESSION, NOT --resume. This is the correction of 2026-09-12: the first
+  # live firing hung for 35 minutes because `claude --bg --resume <id>` does not
+  # return when that session is still running — and a parked interactive session
+  # is still running, always. Parking does not exit a session; it ends its turn
+  # and gates its tools, so the session is idle-but-alive at wake time and
+  # "already running" is the normal case rather than an edge one.
+  #
+  # Measured on this machine: `claude --bg "<prompt>"` on a fresh session returns
+  # in 0s with exit 0 and no TTY; the same command with --resume against a live
+  # session never returns at all.
+  #
+  # HANDOFF.md is what carries the work across, which is why the gate makes the
+  # session write it before parking. A fresh session reading that file is also a
+  # better starting point than the exhausted context that hit the wall.
+  #
+  # Bounded, because this runs unattended: nothing launchd starts may hang
+  # forever. The wait is generous relative to the 0s this takes when it works.
+  "$CLAUDE" --bg "$PROMPT" < /dev/null 2>&1 &
+  CPID=$!
+  WAITED=0
+  while [ "$WAITED" -lt 60 ] && kill -0 "$CPID" 2>/dev/null; do
+    sleep 2
+    WAITED=$((WAITED + 2))
+  done
+  if kill -0 "$CPID" 2>/dev/null; then
+    kill "$CPID" 2>/dev/null
+    log "resume: claude did not return within ${WAITED}s — killed it. Nothing was started."
+  else
+    wait "$CPID"
+    log "resume: claude exited $? after ${WAITED}s"
+  fi
 fi
 
 # Self-removal, last. A StartCalendarInterval job with a month and day set would

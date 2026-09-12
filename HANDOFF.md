@@ -82,6 +82,20 @@ transcript `model` field, and `/user/balance` are all unusable for metering.
 **Tests: 193 passing**, from 107 at the start of the session. Dependency floor
 held — no jq, python, perl, awk, sed or node in any shipped script.
 
+## The first live resume failed, and is fixed
+
+Both parked jobs fired at 14:45:05, on time, and then hung for thirty-five
+minutes. `claude --bg --resume <id>` does not return while that session is still
+running, and a parked session is always still running — parking ends a turn and
+gates the tools, it exits nothing. The mechanism could only have worked for a
+session that had already exited.
+
+`resume.sh` now starts a **new** session in the parked directory and hands it
+`HANDOFF.md`, watchdogged at 60 seconds. `DECISIONS.md` D4 carries the
+correction. If you see a `com.llmdrive.budget-resume.*` job still listed by
+`launchctl list` long after its time, that is this bug and it is now tested
+against.
+
 ## What is in the way
 
 - **The DeepSeek balance is $5.00, not the $80/month cap.** Keep probes small

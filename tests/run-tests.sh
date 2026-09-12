@@ -625,6 +625,22 @@ case $OUT in
   *) bad "and is told to return its findings, not to write files" "$OUT" ;;
 esac
 
+# Claude Code drops a window once it has reset, so the percentage is empty and
+# the gate's whole-percent helper yields -1. Printing "5h -1%" reads as a broken
+# meter rather than an empty window, which is what it did on the first reset.
+set_state "" 28.0
+rm -rf "$BHOME/.claude/budget-run"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"-1%"*) bad "a window that has just reset does not print as -1%" "$OUT" ;;
+  *"window fresh"*) ok "a window that has just reset prints as fresh" ;;
+  *) bad "a window that has just reset prints as fresh" "$OUT" ;;
+esac
+case $OUT in
+  *"7d 28%"*) ok "and the weekly window is still reported beside it" ;;
+  *) bad "and the weekly window is still reported beside it" "$OUT" ;;
+esac
+
 set_state 12.0 91.5
 rm -rf "$BHOME/.claude/budget-run"
 OUT="$(gate prompt Bash)"
@@ -762,6 +778,99 @@ else
   else
     bad "park.sh leaves nothing behind when launchd refuses"
   fi
+fi
+
+# ---------------------------------------------------------------------------
+group "Resuming — a new session, never --resume, and never unbounded"
+# ---------------------------------------------------------------------------
+# The regression: the first live firing hung for 35 minutes because
+# `claude --bg --resume <id>` does not return while that session is still
+# running — and a parked session is idle-but-alive, so that is the normal case.
+# These assert the shape of what resume.sh runs, not just that it runs.
+RHOME="$WORK/rhome"; mkdir -p "$RHOME/.claude/budget-run" "$RHOME/Library/LaunchAgents" "$RHOME/proj"
+RSTUB="$WORK/rstub"; mkdir -p "$RSTUB"
+cat > "$RSTUB/launchctl" <<'STUBEOF'
+#!/bin/bash
+exit 0
+STUBEOF
+cat > "$RSTUB/claude" <<'STUBEOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$CLAUDE_STUB_ARGV"
+[ -n "${CLAUDE_STUB_SLEEP:-}" ] && sleep "$CLAUDE_STUB_SLEEP"
+exit 0
+STUBEOF
+chmod +x "$RSTUB/launchctl" "$RSTUB/claude"
+export CLAUDE_STUB_ARGV="$WORK/claude-argv.txt"
+
+run_resume() {                 # run_resume SESSION_ID
+  # Separate statements on purpose: bash expands the whole word list of one
+  # `local` before it assigns any of it, so a later item cannot read an earlier
+  # one and `set -u` aborts on the reference.
+  local sid=$1
+  local env="$RHOME/.claude/budget-run/parked-$sid.env"
+  local plist="$RHOME/Library/LaunchAgents/com.llmdrive.budget-resume.$sid.plist"
+  : > "$plist"
+  touch "$RHOME/.claude/budget-run/parked-$sid"
+  printf 'SESSION=%s\nCWD=%s\nPROMPT=%s\nWAKE=%s\nLABEL=%s\nPLIST=%s\n' \
+    "$sid" "$RHOME/proj" "Read HANDOFF.md and continue" "$(( $(date +%s) - 10 ))" \
+    "com.llmdrive.budget-resume.$sid" "$plist" > "$env"
+  HOME="$RHOME" PATH="$RSTUB:$PATH" bash "$ROOT/modules/budget/resume.sh" "$env" \
+    >> "$RHOME/.claude/budget-resume.log" 2>&1
+}
+
+rm -f "$CLAUDE_STUB_ARGV"
+run_resume sess-r1
+if [ -f "$CLAUDE_STUB_ARGV" ]; then
+  ARGV="$(cat "$CLAUDE_STUB_ARGV")"
+  case $ARGV in
+    *--resume*) bad "resume.sh does not pass --resume" "argv was: $(echo "$ARGV" | tr '\n' ' ')" ;;
+    *) ok "resume.sh does not pass --resume" ;;
+  esac
+  case $ARGV in
+    *--bg*) ok "resume.sh starts a background session" ;;
+    *) bad "resume.sh starts a background session" "$ARGV" ;;
+  esac
+  case $ARGV in
+    *HANDOFF.md*) ok "the prompt it starts with names HANDOFF.md, which carries the work across" ;;
+    *) bad "the prompt it starts with names HANDOFF.md" "$ARGV" ;;
+  esac
+else
+  bad "resume.sh invoked claude at all"
+  bad "resume.sh starts a background session"
+  bad "the prompt it starts with names HANDOFF.md"
+fi
+RLOG="$RHOME/.claude/budget-resume.log"
+if grep -q "claude exited 0" "$RLOG"; then ok "it logs the exit status it saw"
+else bad "it logs the exit status it saw" "$(cat "$RLOG")"; fi
+if [ ! -f "$RHOME/.claude/budget-run/parked-sess-r1" ]; then ok "it clears the gate marker"
+else bad "it clears the gate marker"; fi
+if [ ! -f "$RHOME/Library/LaunchAgents/com.llmdrive.budget-resume.sess-r1.plist" ]; then
+  ok "it removes its own launch agent so it cannot fire twice"
+else
+  bad "it removes its own launch agent so it cannot fire twice"
+fi
+if [ ! -f "$RHOME/.claude/budget-run/parked-sess-r1.env" ]; then ok "it removes its env file"
+else bad "it removes its env file"; fi
+
+# The poll loop's normal path: a command that takes a moment is waited for, not
+# abandoned. The 60s ceiling itself is deliberately not exercised here — a test
+# that waits a minute would not get run.
+: > "$RLOG"; rm -f "$CLAUDE_STUB_ARGV"
+CLAUDE_STUB_SLEEP=3 run_resume sess-r2
+if grep -q "claude exited 0" "$RLOG"; then ok "a slow start is waited for rather than killed"
+else bad "a slow start is waited for rather than killed" "$(cat "$RLOG")"; fi
+
+# An early firing must leave the job in place and change nothing.
+: > "$RLOG"; rm -f "$CLAUDE_STUB_ARGV"
+ENV3="$RHOME/.claude/budget-run/parked-sess-r3.env"
+touch "$RHOME/.claude/budget-run/parked-sess-r3"
+printf 'SESSION=sess-r3\nCWD=%s\nPROMPT=x\nWAKE=%s\nLABEL=l\nPLIST=\n' \
+  "$RHOME/proj" "$(( $(date +%s) + 600 ))" > "$ENV3"
+HOME="$RHOME" PATH="$RSTUB:$PATH" bash "$ROOT/modules/budget/resume.sh" "$ENV3" >> "$RLOG" 2>&1
+if [ ! -f "$CLAUDE_STUB_ARGV" ] && [ -f "$RHOME/.claude/budget-run/parked-sess-r3" ]; then
+  ok "an early firing starts nothing and leaves the gate closed"
+else
+  bad "an early firing starts nothing and leaves the gate closed" "$(cat "$RLOG")"
 fi
 
 # ---------------------------------------------------------------------------
