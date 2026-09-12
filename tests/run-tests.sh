@@ -66,7 +66,8 @@ group "Dependency floor — the whole point of the rewrite"
 # literal # inside a string — but it only ever removes text from the search, and
 # these scripts have no such string.
 AUDIT_TOOLS="jq perl python python3 awk sed node"
-for f in install.sh uninstall.sh lib.sh hooks/drive-mode.sh omniroute/install-omniroute.sh; do
+for f in install.sh uninstall.sh lib.sh hooks/drive-mode.sh omniroute/install-omniroute.sh \
+         budget/sensor.sh budget/gate.sh budget/park.sh budget/resume.sh; do
   found=""
   while IFS= read -r line; do
     line=${line%%#*}
@@ -334,9 +335,13 @@ if [ "$HAVE_PY" = 1 ]; then
     "install.sh preserved an unrelated setting"
 fi
 
+SETTINGS_AFTER_FIRST="$(cat "$E2E/settings.json")"
 CLAUDE_DIR="$E2E" bash "$ROOT/install.sh" > "$WORK/install2.log" 2>&1
-if grep -q "already registered" "$WORK/install2.log"; then ok "a second install.sh is a no-op on settings.json"
-else bad "a second install.sh is a no-op on settings.json" "$(cat "$WORK/install2.log")"; fi
+# Asserted on the file rather than on the wording of a log line: the claim is
+# that a re-run changes nothing, and a message can be reworded without that
+# becoming false.
+assert_eq "$SETTINGS_AFTER_FIRST" "$(cat "$E2E/settings.json")" "a second install.sh is a no-op on settings.json"
+assert_eq 1 "$(ls "$E2E"/settings.json.bak.* 2>/dev/null | wc -l | tr -d ' ')" "a second install.sh writes no second backup"
 if [ "$(ls "$E2E"/settings.json.bak.* | wc -l | tr -d ' ')" = 1 ]; then ok "the no-op install writes no second backup"
 else bad "the no-op install writes no second backup"; fi
 
@@ -444,6 +449,372 @@ if PATH="$STUB:$PATH" bash "$ROOT/omniroute/install-omniroute.sh" > "$WORK/omni2
 else
   if grep -q "lengths differ" "$WORK/omni2.log"; then ok "a truncated read-back is reported as a failure"
   else bad "a truncated read-back is reported as a failure" "$(cat "$WORK/omni2.log")"; fi
+fi
+
+# ---------------------------------------------------------------------------
+group "Budget sensor — reading the status line payload"
+# ---------------------------------------------------------------------------
+# The sensor is the only thing that knows the plan limits, so everything the
+# gate does rests on it parsing this payload correctly. The shapes below are the
+# ones the status line reference says actually occur: any window independently
+# absent, the whole object absent, and no guaranteed key order.
+BHOME="$WORK/bhome"; mkdir -p "$BHOME/.claude"
+sensor() {                     # payload on stdin; prints the status line
+  HOME="$BHOME" bash "$ROOT/budget/sensor.sh"
+}
+state_get() {                  # state_get KEY
+  local line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in "$1="*) printf '%s' "${line#*=}"; return 0 ;; esac
+  done < "$BHOME/.claude/budget-state"
+}
+
+sensor >/dev/null <<'PAYLOAD'
+{"model":{"id":"claude-opus-5","display_name":"Opus 5"},
+ "workspace":{"current_dir":"/tmp/proj"},
+ "rate_limits":{"seven_day":{"used_percentage":41.2,"resets_at":1738857600},
+                "five_hour":{"used_percentage":97.6,"resets_at":1738425600},
+                "spend_limit":{"used_percentage":62.8,"resets_at":1740787200}}}
+PAYLOAD
+assert_eq present    "$(state_get RATE_LIMITS)"  "sensor sees rate_limits"
+assert_eq 97.6       "$(state_get FIVE_H_PCT)"   "five_hour percentage, listed after seven_day"
+assert_eq 1738425600 "$(state_get FIVE_H_RESET)" "five_hour reset, listed after seven_day"
+assert_eq 41.2       "$(state_get SEVEN_D_PCT)"  "seven_day percentage"
+assert_eq 62.8       "$(state_get SPEND_PCT)"    "spend_limit percentage"
+
+# The failure this bounding exists to prevent: with five_hour gone, a scan that
+# just looked for the next "used_percentage" would report seven_day's number as
+# the session window and the gate would never fire.
+sensor >/dev/null <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},
+ "rate_limits":{"seven_day":{"used_percentage":91,"resets_at":1738857600}}}
+PAYLOAD
+assert_eq ""   "$(state_get FIVE_H_PCT)"   "an absent five_hour window stays empty"
+assert_eq ""   "$(state_get FIVE_H_RESET)" "an absent five_hour reset stays empty"
+assert_eq 91   "$(state_get SEVEN_D_PCT)"  "the weekly window is still read"
+
+sensor >/dev/null <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},"context_window":{"used_percentage":8}}
+PAYLOAD
+assert_eq absent "$(state_get RATE_LIMITS)"  "no rate_limits is recorded as absent, not as zero"
+assert_eq ""     "$(state_get FIVE_H_PCT)"   "context_window percentages are not mistaken for plan limits"
+
+OUT="$(sensor <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},"context_window":{"used_percentage":8}}
+PAYLOAD
+)"
+case $OUT in
+  *"no plan limits"*) ok "the status line says so when there are no plan limits" ;;
+  *) bad "the status line says so when there are no plan limits" "$OUT" ;;
+esac
+
+OUT="$(sensor <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/proj"},
+ "rate_limits":{"five_hour":{"used_percentage":42.9,"resets_at":1738425600}}}
+PAYLOAD
+)"
+case $OUT in
+  *"5h 42%"*) ok "the status line truncates rather than rounds up (42.9 -> 42)" ;;
+  *) bad "the status line truncates rather than rounds up (42.9 -> 42)" "$OUT" ;;
+esac
+
+# ---------------------------------------------------------------------------
+group "Budget gate — thresholds, allowlist and failing open"
+# ---------------------------------------------------------------------------
+mkdir -p "$BHOME/.claude/drive-budget"
+cp "$ROOT/budget/BUDGET.md" "$BHOME/.claude/drive-budget/BUDGET.md"
+NOW_T="$(date +%s)"
+
+set_state() {                  # set_state 5H% 7D% [AGE_SECONDS] [present|absent]
+  printf 'UPDATED=%s\nRATE_LIMITS=%s\nFIVE_H_PCT=%s\nFIVE_H_RESET=%s\nSEVEN_D_PCT=%s\nSEVEN_D_RESET=%s\n' \
+    "$((NOW_T - ${3:-10}))" "${4:-present}" "$1" "$((NOW_T + 900))" "$2" "$((NOW_T + 90000))" \
+    > "$BHOME/.claude/budget-state"
+}
+hook_json() {                  # hook_json TOOL [EXTRA_JSON]
+  printf '{"session_id":"sess-1","cwd":"/tmp/proj","tool_name":"%s"%s}' "$1" "${2:-}"
+}
+gate() {                       # gate MODE TOOL [EXTRA_JSON]
+  hook_json "$2" "${3:-}" | HOME="$BHOME" bash "$ROOT/budget/gate.sh" "$1"
+}
+decision() {                   # decision from a PreToolUse result, via python3
+  [ "$HAVE_PY" = 1 ] || return 1
+  python3 -c '
+import json,sys
+s=sys.stdin.read().strip()
+if not s: print("silent"); raise SystemExit
+d=json.loads(s)["hookSpecificOutput"]
+print(d.get("permissionDecision") or ("context" if "additionalContext" in d else "?"))'
+}
+
+rm -f "$BHOME/.claude/budget-mode"
+set_state 99.9 99.9
+assert_eq "" "$(gate prompt Bash)" "with the flag off the prompt hook says nothing"
+assert_eq "" "$(gate tool Bash)"   "with the flag off the tool gate says nothing"
+
+touch "$BHOME/.claude/budget-mode"
+rm -rf "$BHOME/.claude/budget-run"
+set_state 42.1 61.7
+OUT="$(gate prompt Bash)"
+case $OUT in
+  "Budget: 5h 42%"*) ok "below the thresholds the prompt hook prints one status line" ;;
+  *) bad "below the thresholds the prompt hook prints one status line" "$OUT" ;;
+esac
+assert_eq 1 "$(gate prompt Bash | wc -l | tr -d ' ')" "and only one line"
+assert_eq "" "$(gate tool Bash)" "below the thresholds the tool gate is silent"
+
+set_state 97.2 61.7
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq context "$(gate tool Bash | decision)" "at the wrap threshold the tool gate adds context"
+assert_eq silent  "$(gate tool Bash | decision)" "and does not repeat itself on the next call"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"nearly spent"*"⇒ NEXT"*) ok "the wrap directive carries the record schema" ;;
+  *) bad "the wrap directive carries the record schema" "$OUT" ;;
+esac
+
+set_state 99.4 61.7
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq context "$(gate tool Write | decision)" "at the hard threshold Write is still allowed through"
+assert_eq context "$(gate tool Bash  | decision)" "and so is Bash, so the record can be committed"
+assert_eq deny    "$(gate tool Task  | decision)" "but Task is denied — subagents spend the window fastest"
+assert_eq deny    "$(gate tool WebFetch | decision)" "and so is anything else not needed to write the record"
+if [ "$HAVE_PY" = 1 ]; then
+  if gate tool Task | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
+    ok "the deny it emits is valid JSON"
+  else
+    bad "the deny it emits is valid JSON" "$(gate tool Task)"
+  fi
+fi
+
+# The allowance has to be bounded, or "write the record" is an open licence to
+# keep calling Read. 25 is the default; the 26th call is refused.
+rm -rf "$BHOME/.claude/budget-run"; mkdir -p "$BHOME/.claude/budget-run"
+printf '%s 25\n' "$((NOW_T + 900))" > "$BHOME/.claude/budget-run/calls"
+assert_eq deny "$(gate tool Read | decision)" "the record allowance is bounded at HANDOFF_CALLS"
+# A new window starts the count over: the stamp no longer matches.
+printf 'stale-window 25\n' > "$BHOME/.claude/budget-run/calls"
+assert_eq context "$(gate tool Read | decision)" "a new window resets the allowance"
+
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq deny "$(gate tool Read ',"agent_id":"ag-1","agent_type":"Explore"' | decision)" \
+  "a subagent at the hard threshold is closed outright"
+OUT="$(gate tool Read ',"agent_id":"ag-1"' )"
+case $OUT in
+  *"Return immediately"*) ok "and is told to return its findings, not to write files" ;;
+  *) bad "and is told to return its findings, not to write files" "$OUT" ;;
+esac
+
+set_state 12.0 91.5
+rm -rf "$BHOME/.claude/budget-run"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"weekly window is nearly spent"*) ok "the weekly window has its own, earlier documentation threshold" ;;
+  *) bad "the weekly window has its own, earlier documentation threshold" "$OUT" ;;
+esac
+set_state 12.0 97.5
+assert_eq deny "$(gate tool Task | decision)" "and its own hard threshold"
+
+# Failing open, loudly. A gate that denied tools because it could not read its
+# own state file would brick the session over its own bug.
+set_state 99.9 99.9 7200
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq silent "$(gate tool Task | decision)" "a stale state file leaves the tool gate open"
+OUT="$(gate prompt Bash)"
+case $OUT in
+  *"NO USAGE DATA"*) ok "and the prompt hook says so rather than staying quiet" ;;
+  *) bad "and the prompt hook says so rather than staying quiet" "$OUT" ;;
+esac
+
+set_state 99.9 50 10
+mkdir -p "$BHOME/.claude/budget-run"; touch "$BHOME/.claude/budget-run/parked-sess-1"
+assert_eq deny "$(gate tool Read | decision)" "a parked session is closed to every tool"
+OUT="$(printf '{"session_id":"sess-2","tool_name":"Read"}' | HOME="$BHOME" bash "$ROOT/budget/gate.sh" tool | decision)"
+assert_eq context "$OUT" "but parking one session does not gate another out of writing its own record"
+rm -rf "$BHOME/.claude/budget-run"
+
+# Thresholds come from the config file when it is there.
+printf 'WRAP_PCT=50\nSTOP_PCT=60\n' > "$BHOME/.claude/budget-config"
+set_state 65.0 10.0
+assert_eq deny "$(gate tool Task | decision)" "budget-config overrides the built-in thresholds"
+# A config value that is not a number is dropped, leaving the built-in default:
+# at 98% with STOP_PCT back at 99 the level is wrap, not stop, so Task gets
+# context rather than a deny. Obeying "oops" as a threshold would deny here.
+printf 'STOP_PCT=oops\nWRAP_PCT=\n' > "$BHOME/.claude/budget-config"
+set_state 98.0 10.0
+rm -rf "$BHOME/.claude/budget-run"
+assert_eq context "$(gate tool Task | decision)" "a non-numeric config value is ignored, not obeyed"
+rm -f "$BHOME/.claude/budget-config"
+
+# Every marker the gate asks BUDGET.md for must exist, or a directive silently
+# comes back empty.
+for m in WRAP STOP WEEK_DOC WEEK_STOP SUBAGENT PARKED SCHEMA; do
+  if grep -q "^<!-- @$m -->$" "$ROOT/budget/BUDGET.md"; then ok "BUDGET.md has the @$m section"
+  else bad "BUDGET.md has the @$m section"; fi
+done
+
+# ---------------------------------------------------------------------------
+group "Parking — what gets scheduled, and what refuses to be"
+# ---------------------------------------------------------------------------
+# launchctl is stubbed. The point is to assert the plist that would be loaded
+# and the order of operations, without registering a job on the machine running
+# the tests.
+PHOME="$WORK/phome"; mkdir -p "$PHOME/.claude" "$PHOME/Library/LaunchAgents" "$PHOME/proj"
+LSTUB="$WORK/lstub"; mkdir -p "$LSTUB"
+cat > "$LSTUB/launchctl" <<'STUBEOF'
+#!/bin/bash
+echo "launchctl $*" >> "$LAUNCHCTL_LOG"
+[ "${LAUNCHCTL_FAIL:-0}" = 1 ] && [ "$1" = bootstrap ] && exit 1
+exit 0
+STUBEOF
+chmod +x "$LSTUB/launchctl"
+export LAUNCHCTL_LOG="$WORK/launchctl.log"
+
+park() { HOME="$PHOME" PATH="$LSTUB:$PATH" bash "$ROOT/budget/park.sh" "$@"; }
+RESET_AT=$(( $(date +%s) + 3600 ))
+printf 'UPDATED=%s\nRATE_LIMITS=present\nFIVE_H_PCT=99.5\nFIVE_H_RESET=%s\nSEVEN_D_PCT=20\nSEVEN_D_RESET=\n' \
+  "$(date +%s)" "$RESET_AT" > "$PHOME/.claude/budget-state"
+
+if park --session "" >/dev/null 2>&1; then bad "park.sh refuses an empty session id"
+else ok "park.sh refuses an empty session id"; fi
+if park --session 'a b;rm -rf /' >/dev/null 2>&1; then bad "park.sh refuses a session id it cannot put in a label"
+else ok "park.sh refuses a session id it cannot put in a label"; fi
+if park --session ok-1 --window seven_day >/dev/null 2>&1; then bad "park.sh refuses a window with no known reset"
+else ok "park.sh refuses a window with no known reset"; fi
+
+if [ "$(uname -s)" != Darwin ]; then
+  skip "park.sh writes a loadable plist (not macOS)"
+  skip "park.sh sets the gate marker only after launchd accepts the job"
+  skip "park.sh leaves nothing behind when launchd refuses"
+  skip "park.sh --status lists what is parked"
+  skip "park.sh --cancel removes the job, the plist and the marker"
+else
+  : > "$LAUNCHCTL_LOG"
+  if park --session sess-1 --cwd "$PHOME/proj" > "$WORK/park.log" 2>&1; then
+    ok "park.sh schedules a resume"
+  else
+    bad "park.sh schedules a resume" "$(cat "$WORK/park.log")"
+  fi
+  PLIST="$PHOME/Library/LaunchAgents/com.llmdrive.budget-resume.sess-1.plist"
+  if [ -f "$PLIST" ]; then ok "park.sh wrote the launch agent"; else bad "park.sh wrote the launch agent"; fi
+  WAKE=$((RESET_AT + 300))
+  WANT_H=$(( 10#$(date -r "$WAKE" +%H) )); WANT_M=$(( 10#$(date -r "$WAKE" +%M) ))
+  if grep -q "<key>Hour</key><integer>$WANT_H</integer>" "$PLIST" &&
+     grep -q "<key>Minute</key><integer>$WANT_M</integer>" "$PLIST"; then
+    ok "it fires RESUME_DELAY_S after the window resets"
+  else
+    bad "it fires RESUME_DELAY_S after the window resets" "wanted $WANT_H:$WANT_M in $(cat "$PLIST")"
+  fi
+  if command -v plutil >/dev/null 2>&1; then
+    if plutil -lint "$PLIST" >/dev/null 2>&1; then ok "the plist parses"; else bad "the plist parses"; fi
+  else
+    skip "the plist parses (no plutil)"
+  fi
+  if [ -f "$PHOME/.claude/budget-run/parked-sess-1" ]; then
+    ok "park.sh sets the gate marker only after launchd accepts the job"
+  else
+    bad "park.sh sets the gate marker only after launchd accepts the job"
+  fi
+  OUT="$(park --status)"
+  case $OUT in
+    *"parked  sess-1"*) ok "park.sh --status lists what is parked" ;;
+    *) bad "park.sh --status lists what is parked" "$OUT" ;;
+  esac
+
+  park --cancel --session sess-1 >/dev/null 2>&1
+  if [ ! -f "$PLIST" ] && [ ! -f "$PHOME/.claude/budget-run/parked-sess-1" ]; then
+    ok "park.sh --cancel removes the job, the plist and the marker"
+  else
+    bad "park.sh --cancel removes the job, the plist and the marker"
+  fi
+
+  # A refused bootstrap must leave nothing: a marker with no job behind it is a
+  # session gated shut with nothing coming to wake it.
+  : > "$LAUNCHCTL_LOG"
+  if LAUNCHCTL_FAIL=1 park --session sess-2 --cwd "$PHOME/proj" >/dev/null 2>&1; then
+    bad "park.sh reports a refused bootstrap as a failure"
+  else
+    ok "park.sh reports a refused bootstrap as a failure"
+  fi
+  if [ ! -f "$PHOME/Library/LaunchAgents/com.llmdrive.budget-resume.sess-2.plist" ] &&
+     [ ! -f "$PHOME/.claude/budget-run/parked-sess-2" ]; then
+    ok "park.sh leaves nothing behind when launchd refuses"
+  else
+    bad "park.sh leaves nothing behind when launchd refuses"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+group "Installing the budget module"
+# ---------------------------------------------------------------------------
+B2E="$WORK/b2e"; mkdir -p "$B2E"
+printf '%s' '{
+  "model": "opus[1m]",
+  "hooks": {
+    "PreToolUse": [
+      { "hooks": [ { "type": "command", "command": "/usr/local/bin/somebody-else.sh" } ] }
+    ]
+  }
+}
+' > "$B2E/settings.json"
+B2E_ORIGINAL="$(cat "$B2E/settings.json")"
+if CLAUDE_DIR="$B2E" bash "$ROOT/install.sh" > "$WORK/binstall.log" 2>&1; then
+  ok "install.sh installs the budget module alongside an unrelated PreToolUse hook"
+else
+  bad "install.sh installs the budget module alongside an unrelated PreToolUse hook" "$(cat "$WORK/binstall.log")"
+fi
+for want in drive-budget/sensor.sh drive-budget/gate.sh drive-budget/park.sh drive-budget/resume.sh \
+            drive-budget/BUDGET.md commands/budget-on.md commands/budget-off.md budget-config; do
+  if [ -f "$B2E/$want" ]; then ok "install.sh placed $want"; else bad "install.sh placed $want"; fi
+done
+assert_json "$B2E/settings.json" "settings.json is still valid JSON"
+if settings_hook_registered "$B2E/settings.json" gate.sh PreToolUse; then ok "the tool gate is registered on PreToolUse"
+else bad "the tool gate is registered on PreToolUse"; fi
+if settings_hook_registered "$B2E/settings.json" gate.sh UserPromptSubmit; then ok "the prompt hook is registered on UserPromptSubmit"
+else bad "the prompt hook is registered on UserPromptSubmit"; fi
+if settings_hook_registered "$B2E/settings.json" somebody-else.sh PreToolUse; then ok "the unrelated PreToolUse hook survived"
+else bad "the unrelated PreToolUse hook survived"; fi
+if settings_statusline_command SLC "$B2E/settings.json"; then
+  case $SLC in *sensor.sh*) ok "the sensor is registered as the status line" ;;
+               *) bad "the sensor is registered as the status line" "$SLC" ;; esac
+else
+  bad "the sensor is registered as the status line"
+fi
+
+# An edited threshold must survive a reinstall.
+printf 'WRAP_PCT=80\n' > "$B2E/budget-config"
+CLAUDE_DIR="$B2E" bash "$ROOT/install.sh" >/dev/null 2>&1
+assert_eq 'WRAP_PCT=80' "$(cat "$B2E/budget-config")" "a reinstall does not overwrite budget-config"
+
+CLAUDE_DIR="$B2E" bash "$ROOT/uninstall.sh" > "$WORK/buninstall.log" 2>&1
+assert_eq "$B2E_ORIGINAL" "$(cat "$B2E/settings.json")" "uninstall restores settings.json byte for byte"
+for gone in drive-budget/sensor.sh drive-budget/gate.sh commands/budget-on.md commands/budget-off.md; do
+  if [ -f "$B2E/$gone" ]; then bad "uninstall removed $gone"; else ok "uninstall removed $gone"; fi
+done
+if [ -f "$B2E/budget-config" ]; then ok "uninstall keeps budget-config, like the settings backups"
+else bad "uninstall keeps budget-config, like the settings backups"; fi
+
+# A status line someone else wrote is reported, never taken over.
+S3="$WORK/s3"; mkdir -p "$S3"
+printf '%s' '{
+  "statusLine": { "type": "command", "command": "~/my-own-line.sh" }
+}
+' > "$S3/settings.json"
+S3_ORIGINAL="$(cat "$S3/settings.json")"
+if CLAUDE_DIR="$S3" bash "$ROOT/install.sh" > "$WORK/s3.log" 2>&1; then
+  bad "install.sh reports an existing statusLine as a failure rather than replacing it"
+else
+  ok "install.sh reports an existing statusLine as a failure rather than replacing it"
+fi
+if settings_statusline_command SLC "$S3/settings.json" && [ "$SLC" = '"~/my-own-line.sh"' ]; then
+  ok "the existing status line is untouched"
+else
+  bad "the existing status line is untouched" "$SLC"
+fi
+CLAUDE_DIR="$S3" bash "$ROOT/uninstall.sh" >/dev/null 2>&1
+if settings_statusline_command SLC "$S3/settings.json" && [ "$SLC" = '"~/my-own-line.sh"' ]; then
+  ok "uninstall leaves a status line it did not install"
+else
+  bad "uninstall leaves a status line it did not install" "$SLC"
 fi
 
 # ---------------------------------------------------------------------------
