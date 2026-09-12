@@ -249,7 +249,14 @@ fi
 # Only now: the marker that closes the gate. Setting it before the job was
 # accepted would leave a session unable to act and with nothing coming to wake
 # it — the one failure mode worse than not parking at all.
-touch "$RUN/parked-$SESSION"
+#
+# It holds the wake time rather than being empty, so the gate can expire it
+# without help. Claude Code's own automatic continue resumes an interactive
+# session the moment the limit resets, before this job runs, and a marker that
+# could only be cleared by this job would gate that continuation into
+# uselessness. A parked session cannot un-park itself either, so the marker has
+# to carry its own end.
+echo "$WAKE" > "$RUN/parked-$SESSION"
 
 echo "Parked. The $WINDOW window resets at $(date -r "$RESET" '+%a %H:%M'); this session resumes at $(date -r "$WAKE" '+%a %H:%M') in $CWD."
 echo "Cancel with: \"$SELF_DIR/park.sh\" --cancel --session $SESSION"

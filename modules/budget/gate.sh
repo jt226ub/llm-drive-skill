@@ -146,11 +146,38 @@ esac
 # ---------------------------------------------------------------------------
 # Which level applies
 # ---------------------------------------------------------------------------
-LEVEL=none
-# The parked marker is per session on purpose: parking is one session deciding
-# it is finished, not a statement about the machine. A second session still has
-# its own record to write, and must not be gated out of writing it.
+# The parked marker holds the moment the park is spent — the wake time park.sh
+# scheduled. Past that, it is removed and ignored.
+#
+# It must expire on its own, and without consulting the sensor, for two reasons.
+# Claude Code's own automatic continue resumes an interactive session the instant
+# the limit resets, which is *before* the scheduled wake, and it would land on a
+# gate that denies every tool and achieve nothing. And a parked session cannot
+# un-park itself — the gate denies the very tools it would need — so a marker
+# that outlives its window with no way to clear itself is the worst state this
+# module can produce.
+#
+# A marker with no readable timestamp is treated as spent. That is the
+# fail-open direction, and it is the right one here for the same reason.
+PARKED=0
 if [ -n "$SESSION_ID" ] && [ -f "$RUN/parked-$SESSION_ID" ]; then
+  PARK_UNTIL=''
+  read -r PARK_UNTIL < "$RUN/parked-$SESSION_ID" 2>/dev/null
+  case $PARK_UNTIL in
+    ''|*[!0-9]*) rm -f "$RUN/parked-$SESSION_ID" 2>/dev/null ;;
+    *) if [ "$NOW" -ge "$PARK_UNTIL" ]; then
+         rm -f "$RUN/parked-$SESSION_ID" 2>/dev/null
+       else
+         PARKED=1
+       fi ;;
+  esac
+fi
+
+LEVEL=none
+# Parking is one session deciding it is finished, not a statement about the
+# machine, which is why the marker is per session: a second session still has
+# its own record to write and must not be gated out of writing it.
+if [ "$PARKED" = 1 ]; then
   LEVEL=parked
 elif [ "$STALE" = 1 ] || [ "$RATE_LIMITS" != present ]; then
   LEVEL=unknown

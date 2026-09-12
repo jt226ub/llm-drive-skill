@@ -663,10 +663,25 @@ case $OUT in
 esac
 
 set_state 99.9 50 10
-mkdir -p "$BHOME/.claude/budget-run"; touch "$BHOME/.claude/budget-run/parked-sess-1"
+mkdir -p "$BHOME/.claude/budget-run"
+echo "$((NOW_T + 600))" > "$BHOME/.claude/budget-run/parked-sess-1"
 assert_eq deny "$(gate tool Read | decision)" "a parked session is closed to every tool"
 OUT="$(printf '{"session_id":"sess-2","tool_name":"Read"}' | HOME="$BHOME" bash "$ROOT/modules/budget/gate.sh" tool | decision)"
 assert_eq context "$OUT" "but parking one session does not gate another out of writing its own record"
+
+# The marker must expire on its own. Claude Code's own automatic continue
+# resumes an interactive session the instant the limit resets — before the
+# scheduled wake — and a marker only the wake job could clear would gate that
+# continuation into uselessness. A parked session cannot un-park itself either.
+echo "$((NOW_T - 5))" > "$BHOME/.claude/budget-run/parked-sess-1"
+assert_eq context "$(gate tool Read | decision)" "a park whose wake time has passed no longer gates anything"
+if [ ! -f "$BHOME/.claude/budget-run/parked-sess-1" ]; then
+  ok "and the spent marker is removed rather than left to puzzle someone"
+else
+  bad "and the spent marker is removed rather than left to puzzle someone"
+fi
+: > "$BHOME/.claude/budget-run/parked-sess-1"
+assert_eq context "$(gate tool Read | decision)" "a marker with no readable wake time fails open rather than gating forever"
 rm -rf "$BHOME/.claude/budget-run"
 
 # Thresholds come from the config file when it is there.

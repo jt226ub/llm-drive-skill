@@ -103,10 +103,30 @@ the second, and the early path exited — stranding the job, which never fires
 again. `park.sh` now rounds the wake up to a whole minute and `resume.sh` waits
 out gaps under two minutes.
 
-`DECISIONS.md` D4 carries both corrections. **If a parked session's gate is
-never cleared, remove `~/.claude/budget-run/parked-<session-id>` by hand** — a
-parked session cannot un-park itself, because the gate denies the very tools it
-would need.
+`DECISIONS.md` D4 carries both corrections. The parked marker now holds its own
+wake time and the gate expires it, so a session can no longer be left gated with
+no way out — the trap that made a parked session unable to un-park itself.
+
+## Claude Code already waits out a usage limit, and it is on by default
+
+Found after building park and resume, which makes them largely redundant for the
+five-hour case. Since v2.1.234, an interactive session on a claude.ai
+subscription shows `Usage limit reached · continuing automatically at 3:45pm ·
+esc to cancel`, waits, and continues the task with its context intact. That is
+better than anything this module can do from outside a session.
+
+It does **not** cover: a reset more than 24 hours away, so the weekly limit is
+untouched; Remote Control and agent-team teammate sessions; or a session that
+was exited, since "the wait doesn't restart when you resume the session". Those
+are what park still serves.
+
+`DECISIONS.md` D6 records how the module gets out of its way — the gate never
+exits non-zero, so it cannot block the continuation prompt, and the marker
+expires on its own so a continuation cannot land on a closed gate.
+
+**Open for the owner:** whether park and resume stay at all, given how narrow
+that leaves them. The gate-and-handoff half has no built-in equivalent and is
+not in question.
 
 ## What is in the way
 

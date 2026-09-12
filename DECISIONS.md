@@ -264,3 +264,52 @@ Adding a third module is a directory, a flag, two commands and an installer
 stanza. The cost is that this repository now carries design documents for things
 that are not built, which has to be marked plainly — `modules/sidecar/DESIGN.md`
 opens by saying so.
+
+---
+
+## D6 — The module defers to Claude Code's own automatic continue, and never blocks it
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** Claude Code has waited out a usage limit and continued the task by
+itself since v2.1.234, **on by default** in interactive sessions signed in with a
+claude.ai subscription. It shows `Usage limit reached · continuing automatically
+at 3:45pm · esc to cancel`, keeps the conversation, and resumes at the reset.
+That is most of what this module's park-and-resume half was built to do, found
+after building it.
+
+**Decision.** The module does not compete with it. It never blocks the
+continuation prompt, and the parked marker now carries its own expiry so a
+continuation cannot land on a closed gate.
+
+The marker holds the wake time and the gate removes it once that passes, without
+consulting the sensor. Two reasons, either sufficient. The built-in resumes at
+the reset, which is *earlier* than the scheduled wake, so a marker only the wake
+job could clear would gate that continuation into uselessness. And a parked
+session cannot un-park itself — the gate denies the very tools it would need —
+so a marker that outlives its window with no way to clear itself is the worst
+state this module can produce. A marker with no readable timestamp is treated as
+spent, which is the fail-open direction.
+
+**Rejected.**
+
+- *Deleting park and resume.* The built-in covers the five-hour case in an open
+  interactive session and nothing else. It explicitly does not start a wait for
+  a reset more than 24 hours away — "a weekly limit can reset days out" — nor in
+  Remote Control or agent-team teammate sessions, and "the wait doesn't restart
+  when you resume the session" after exiting. Those are the cases park still
+  serves.
+- *Having the gate block to force the handoff.* A `UserPromptSubmit` hook that
+  blocks the continuation prompt ends the built-in's wait outright. The gate
+  never exits non-zero and never will.
+
+**Consequences.** The module's centre of gravity moves to the half that has no
+built-in equivalent: stopping *before* the wall with a written record, closing
+subagents, and showing the windows on the status line. The built-in is reactive
+— it acts once you have already hit the limit, mid-task, with nothing written
+down. Park and resume are now the minority case rather than the headline, and
+the README should say so rather than implying this is the only way to survive a
+limit.
+
+**Reversed by** the built-in gaining a weekly-limit wait and surviving a session
+exit, which would leave park with nothing to do.
