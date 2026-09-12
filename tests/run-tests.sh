@@ -1175,9 +1175,12 @@ if [ -f "$CLAUDE_ARGV" ]; then
     *"--permission-mode auto"*) ok "and the permission mode is not narrowed below the orchestrator's" ;;
     *) bad "and the permission mode is not narrowed" "$ARGV" ;;
   esac
-  case $ARGV in
-    *deepseek-flash*) bad "a provider model id never reaches --model" "$ARGV" ;;
-    *) ok "a provider model id never reaches --model, which would kill the session" ;;
+  # The value of --model specifically, not "anywhere in argv": the brief names
+  # the real model on purpose now, so a whole-argv search would find it there.
+  MODEL_ARG=$(/usr/bin/grep -A1 -x -- '--model' "$CLAUDE_ARGV" 2>/dev/null | tail -1)
+  case $MODEL_ARG in
+    sonnet) ok "the value of --model is a Claude alias, never the provider's own id" ;;
+    *) bad "the value of --model is a Claude alias" "got [$MODEL_ARG]" ;;
   esac
   # Workers told "Commit it. Nothing else." attempted git push four times each.
   # Only the absence of a remote made that harmless; a worker inherits the
@@ -1193,7 +1196,8 @@ if [ -f "$CLAUDE_ARGV" ]; then
     *) bad "a deny rule for push is passed" "$ARGV" ;;
   esac
   case $ARGV in
-    *"--append-system-prompt"*"Do not push"*) ok "the hand-off brief rides in the system prompt, not in front of the task" ;;
+    *"--append-system-prompt"*"deepseek-flash"*"Do not describe yourself as a Claude model"*"Do not push"*)
+      ok "the brief names the real model and rides in the system prompt, not in front of the task" ;;
     *) bad "the hand-off brief rides in the system prompt (prepending it left the session with an empty prompt)" "$ARGV" ;;
   esac
   # The guard that actually holds. GIT_CONFIG_* is inherited by any git process

@@ -314,7 +314,21 @@ cmd_start() {
   # "blocked", which cost two live tests that were read as inconclusive before
   # the cause was found. It is also the right place for it — this is a standing
   # instruction about how work is handed back, not part of any one task.
-  local brief="Your work will be reviewed as a branch by the session that dispatched you, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left."
+  # Appended, never a replacement. The default system prompt is ~31,000
+  # characters and most of it is harness knowledge — how the tools behave, how
+  # permissions work, how files are handled — which is the whole reason for
+  # running the worker inside Claude Code rather than writing an agent loop. It
+  # is also a stable prefix, so it sits in the provider's automatic cache and
+  # bills at a fraction after the first call.
+  #
+  # What that prompt gets wrong for a worker is narrow and worth correcting: it
+  # describes a Claude model, so the worker believes it is one. Asked directly,
+  # a DeepSeek worker answered "Model ID: claude-sonnet-5" in good faith, and it
+  # signs commits with Claude attribution. Both are corrected here rather than by
+  # discarding 31,000 characters of things that are true.
+  local brief="You are running on $PROVIDER's $model, reached through an Anthropic-compatible endpoint. Your harness is Claude Code and everything it tells you about tools, permissions and files is accurate, but anything in it that identifies you as a Claude model is not: you are $model. Do not describe yourself as a Claude model, and do not put Claude co-authorship or attribution in commit messages.
+
+Your work will be reviewed as a branch by the session that dispatched you, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left."
   # A refusing pre-push hook, reached through the environment rather than the
   # repository's configuration, so nothing in the user's repo is modified.
   #

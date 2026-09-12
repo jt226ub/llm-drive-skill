@@ -474,3 +474,37 @@ part of the task" attempted `git push -u origin worktree-append-mango`, was
 refused twice, left the remote empty, and still committed its work to the
 branch. In isolation the git hook also refused all five invocation forms the
 permissions reference lists as defeating a rule.
+
+---
+
+## D10 — The worker's system prompt is corrected, not replaced
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** A worker runs on a third-party model under Claude Code's default
+system prompt, which describes a Claude model. Asked directly what it was, a
+DeepSeek worker answered "Model ID: claude-sonnet-5" in good faith, and workers
+signed commits with Claude co-authorship. The question was whether to give them
+a generic, model-agnostic worker prompt instead.
+
+**Decision.** Keep the default and append a correction naming the real provider
+and model, telling the worker not to describe itself as a Claude model and not
+to put Claude attribution in commits.
+
+**Rejected.** *Replacing it with a derived prompt via `--system-prompt`.* The
+default is obtainable — a transcript records it, 30,897 characters — so this was
+possible rather than merely hard. Three things argue against it. Most of that
+text is harness knowledge: how the tools behave, how permissions work, how files
+are handled, which is the entire reason for running a worker inside Claude Code
+instead of writing an agent loop. It is nearly free: a stable prefix sits in the
+provider's automatic cache and bills at a fraction after the first call, which is
+what the measured 97% hit rate is made of. And the observed problem was narrow —
+identity, not capability — so discarding 31,000 characters of true statements to
+fix a handful of false ones is the wrong trade. Revisit if a worker is ever
+measured to perform worse *because* of the prompt rather than because of the
+model.
+
+**Consequences.** The correction is a few hundred characters on a cached prefix.
+Verified by behaviour rather than by reading the prompt: a worker asked to write
+down what it runs on wrote `deepseek-flash`, where it had previously reported
+`claude-sonnet-5`, and its commit carried no Claude attribution.
