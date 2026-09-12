@@ -559,3 +559,48 @@ prevent — and a convention that the tool will happily break is not a constrain
 **Consequences.** Parallel delegation needs a deliberate change rather than
 happening by accident. A worker that is stopped without being collected still
 frees the slot, since `stop` removes the record.
+
+---
+
+## D13 — Real spend comes from differencing balance readings, and the readings are kept
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** D11 established that the provider exposes no pricing and no cost or
+usage endpoint. The estimate — a hand-maintained table applied to transcript
+token counts — was therefore the only figure, and nothing could check it.
+
+**Decision.** Sample `/user/balance` at launch and at collect, append each
+reading to `~/.claude/sidecar-balance`, and derive month-to-date spend from
+them. `spend` reports both figures side by side, and the status line shows both
+when both exist.
+
+Spend is the **sum of the falls** between consecutive readings, not first minus
+last. A top-up raises the balance, and first-minus-last would read that as the
+month costing less or as negative spend. Counting only the falls is correct
+whether or not anyone tops up and needs no separate baseline to keep in step.
+Fewer than two readings in a month reports "not yet" rather than zero, because
+one reading is a number and not a measurement.
+
+**Rejected.**
+
+- *Replacing the estimate.* They answer different questions — the estimate
+  attributes cost to one run, the balance knows only the account — and a gap
+  between them is information. Both are shown so a disagreement is visible.
+- *Storing a running total instead of the readings.* The raw readings survive a
+  wrong derivation; a total does not. This is also why the log is append-only
+  and why `uninstall` leaves it, alongside the ledger.
+
+**Consequences.** Granularity is the provider's, $0.01, and the reading lags —
+it showed 5.00 through several confirmed runs earlier today. Neither matters for
+a monthly cap of $80. A provider with no balance endpoint omits the two profile
+keys and degrades to the estimate alone.
+
+**A third instance of one bug class, and the one that finally names it.** The
+sampler passed `__key` to `_credential`, which declares `local __key` itself, so
+the eval assigned the helper's own local and the caller received an empty
+credential — the request went out with `Bearer` and nothing after it, and the
+reading silently never happened. The `__` prefix convention adopted after the
+first two occurrences does not prevent this, because the helpers use `__` names
+too. Only a name the helper does not use works. Every call site that returns
+through `eval "$1=..."` is worth reading with that in mind.

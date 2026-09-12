@@ -44,7 +44,8 @@ rmdir "$CLAUDE_DIR/drive-sidecar/providers" "$CLAUDE_DIR/drive-sidecar" 2>/dev/n
 rm -rf "$CLAUDE_DIR/sidecar-run/"*.hooks 2>/dev/null || true
 rm -f "$CLAUDE_DIR/sidecar-run/"*.env "$CLAUDE_DIR/sidecar-run/"*.collected 2>/dev/null || true
 rmdir "$CLAUDE_DIR/sidecar-run" 2>/dev/null || true
-# sidecar-credentials and sidecar-ledger stay, like budget-config and the
+# sidecar-credentials, sidecar-ledger and sidecar-balance stay, like budget-config
+# and the
 # settings backups: one holds a secret this script has no business deleting,
 # the other is a record of money that was actually spent.
 # budget-config and budget-resume.log stay, the same way settings.json backups

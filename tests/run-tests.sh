@@ -1022,9 +1022,9 @@ sc_fns() {
   SELF_DIR="$ROOT/modules/sidecar" LEDGER="$SCHOME/.claude/sidecar-ledger" \
   bash -c '
     set -u
-    SELF_DIR="'"$ROOT/modules/sidecar"'"; LEDGER="'"$SCHOME/.claude/sidecar-ledger"'"
+    SELF_DIR="'"$ROOT/modules/sidecar"'"; LEDGER="'"$SCHOME/.claude/sidecar-ledger"'"; BALANCE="'"$SCHOME/.claude/sidecar-balance"'"
     die() { echo "die: $1" >&2; exit 9; }
-    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_price_age()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
+    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_to_micro()/,/^}/p;/^_billed_mtd()/,/^}/p;/^_price_age()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
     '"$1"'
   '
 }
@@ -1085,6 +1085,23 @@ done
 printf '%s deepseek deepseek-flash 1 2 3 1500000 s1\n2026-08-01T10:00:00 deepseek deepseek-flash 1 2 3 9000000 s0\n' \
   "$(date +%Y-%m)-12T10:00:00" > "$SCHOME/.claude/sidecar-ledger"
 assert_eq 1500000 "$(sc_fns '_month_to_date t; echo $t')" "the ledger totals this month and ignores older rows"
+
+# The provider exposes no cost endpoint, so what was really spent can only be
+# learned by watching the balance fall. These are the sums that turns readings
+# into a figure.
+for pair in "4.99 4990000" "5 5000000" "0.003 3000" "10.000001 10000001" "4.9 4900000"; do
+  set -- $pair
+  assert_eq "$2" "$(sc_fns "_to_micro m $1; echo \$m")" "a balance of $1 reads as $2 micro-USD"
+done
+BM="$(date +%Y-%m)"
+printf '%s-01T10:00:00 deepseek 5000000\n%s-02T10:00:00 deepseek 4970000\n%s-03T10:00:00 deepseek 9970000\n%s-04T10:00:00 deepseek 9900000\n' \
+  "$BM" "$BM" "$BM" "$BM" > "$SCHOME/.claude/sidecar-balance"
+# Falls only. First-minus-last would read the top-up as the month costing less.
+assert_eq 100000 "$(sc_fns '_billed_mtd t; echo $t')" "spend counts the falls, so a top-up does not read as negative"
+printf '%s-01T10:00:00 deepseek 5000000\n' "$BM" > "$SCHOME/.claude/sidecar-balance"
+assert_eq 1 "$(sc_fns '_billed_mtd t >/dev/null; echo $?' 2>/dev/null)" \
+  "one reading is refused, because one reading is a number and not a measurement"
+rm -f "$SCHOME/.claude/sidecar-balance"
 
 # ---------------------------------------------------------------------------
 group "Sidecar — refusals, and the credential never reaching a command line"

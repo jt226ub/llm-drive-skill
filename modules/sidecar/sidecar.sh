@@ -36,6 +36,7 @@ FLAG="$HOME/.claude/sidecar-mode"
 CREDS="$HOME/.claude/sidecar-credentials"
 RUN="$HOME/.claude/sidecar-run"
 LEDGER="$HOME/.claude/sidecar-ledger"
+BALANCE="$HOME/.claude/sidecar-balance"
 EXTRA="$HOME/.claude/statusline-extra"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CAP_USD=80
@@ -129,7 +130,6 @@ _transcript() {
 # function would silently do nothing. The first test written against _usage hit
 # exactly that, because the obvious call is `_usage miss cached out FILE`.
 
-# _price VAR_MISS VAR_CACHED VAR_OUT PROVIDER MODEL
 # _price_age VARNAME — days since the price table was last checked, or -1 when
 # it carries no date. There is nothing to fetch prices from, so the only defence
 # against a stale table is saying how old it is.
@@ -151,6 +151,7 @@ _price_age() {
   eval "$1=\$(( (__now - __then) / 86400 ))"
 }
 
+# _price VAR_MISS VAR_CACHED VAR_OUT PROVIDER MODEL
 _price() {
   local __p __m __i __c __o __found=0
   while read -r __p __m __i __c __o; do
@@ -226,6 +227,88 @@ _usd() {
   eval "$1=\"\$__d.\$__c\""
 }
 
+# _to_micro VARNAME DECIMAL — "4.99" becomes 4990000.
+_to_micro() {
+  local __v=$1 __s=$2 __int __frac
+  __int=${__s%%.*}
+  case $__s in *.*) __frac=${__s#*.} ;; *) __frac='' ;; esac
+  __frac="${__frac}000000"; __frac=${__frac:0:6}
+  case $__int in ''|*[!0-9]*) eval "$__v=''"; return 1 ;; esac
+  case $__frac in *[!0-9]*) eval "$__v=''"; return 1 ;; esac
+  # 10# because a fraction like 090000 is not octal, whatever it looks like.
+  eval "$__v=\$(( __int * 1000000 + 10#$__frac ))"
+}
+
+# _sample_balance PROVIDER — append one balance reading to the log.
+#
+# This is the only authoritative money signal available: there is no pricing
+# endpoint and no usage or cost endpoint, so what was really spent can only be
+# learned by watching this number fall. The log is append-only and carries the
+# raw readings rather than a running total, so a wrong derivation can be redone
+# from the data rather than having destroyed it.
+#
+# Silent when the provider has no balance endpoint, or the call fails: a missing
+# sample degrades the figure to the estimate, and is not worth failing a launch
+# over.
+_sample_balance() {
+  local __prof="$SELF_DIR/providers/$1.conf" __url __field __secret __ckey __cv __body __raw __micro
+  [ -f "$__prof" ] || return 1
+  _conf __url "$__prof" balance_url   || return 1
+  _conf __field "$__prof" balance_field || return 1
+  _conf __ckey "$__prof" cred_key || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  # NOT __key: _credential declares `local __key` itself, so passing that name
+  # makes it assign its own local and hand back nothing. The __ convention does
+  # not prevent a collision when the helper uses __ names too; only a name the
+  # helper does not use does.
+  _credential __secret "$__ckey" 2>/dev/null || return 1
+  # One header, the one the profile says this provider wants. Sending both was
+  # rejected outright — "Authentication Fails (auth header format should be
+  # Bearer sk-...)" — so the balance reading silently never happened. The
+  # preflight can send both because the messages endpoint accepts either; this
+  # one cannot.
+  local __hdr
+  case $(_conf __cv "$__prof" cred_var; echo "$__cv") in
+    ANTHROPIC_API_KEY) __hdr="x-api-key: $__secret" ;;
+    *)                 __hdr="Authorization: Bearer $__secret" ;;
+  esac
+  __body=$(curl -s -m 20 "$__url" -H "$__hdr" 2>/dev/null) || return 1
+  case $__body in *"\"$__field\""*) ;; *) return 1 ;; esac
+  __raw=${__body#*\"$__field\"}
+  __raw=${__raw#*:}
+  __raw=${__raw#\"}
+  __raw=${__raw%%\"*}
+  __raw=${__raw%%,*}
+  _to_micro __micro "$__raw" || return 1
+  printf '%s %s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$1" "$__micro" >> "$BALANCE" 2>/dev/null
+}
+
+# _billed_mtd VARNAME — micro-USD actually billed this month, from the samples.
+#
+# The sum of the DROPS between consecutive readings, not first minus last. A
+# top-up raises the balance, and first-minus-last would read that as the month
+# costing less, or as negative spend. Counting only the falls is correct whether
+# or not anyone tops up, and needs no separate baseline to keep in step.
+#
+# Returns 1 when there are fewer than two readings this month, because one
+# reading is a number and not yet a measurement.
+_billed_mtd() {
+  local __month __ts __prov __bal __prev='' __total=0 __n=0
+  __month=$(date +%Y-%m)
+  [ -f "$BALANCE" ] || { eval "$1=0"; return 1; }
+  while read -r __ts __prov __bal; do
+    case $__ts in "$__month"*) ;; *) continue ;; esac
+    case $__bal in ''|*[!0-9]*) continue ;; esac
+    __n=$((__n + 1))
+    if [ -n "$__prev" ] && [ "$__bal" -lt "$__prev" ]; then
+      __total=$((__total + __prev - __bal))
+    fi
+    __prev=$__bal
+  done < "$BALANCE"
+  eval "$1=\$__total"
+  [ "$__n" -ge 2 ]
+}
+
 # _month_to_date VARNAME — micro-USD spent this calendar month.
 _month_to_date() {
   local __month __total=0 __ts __a __b __c __d __e __micro __rest
@@ -244,10 +327,18 @@ _month_to_date() {
 # this file when it exists, which is how a second module reaches a status line
 # that settings.json only has one slot for.
 _write_extra() {
-  local micro dollars tmp text
+  local micro dollars tmp text billed bdollars
   _month_to_date micro
   _usd dollars "$micro"
   text="API \$$dollars/\$$CAP_USD"
+  # Both figures when both exist, because they measure different things and a
+  # divergence between them is the interesting signal: the estimate is a price
+  # table applied to token counts, the billed figure is the provider's own
+  # balance falling. Hiding either would make a disagreement invisible.
+  if _billed_mtd billed; then
+    _usd bdollars "$billed"
+    text="API est \$$dollars · billed \$$bdollars / \$$CAP_USD"
+  fi
   # Over the cap is a colour change and nothing else. The cap is advisory by
   # decision: it says the month has cost more than intended, it does not decide
   # that the work should stop.
@@ -333,6 +424,10 @@ cmd_start() {
     000|'') die "could not reach $base to check the credential. Refusing to launch rather than risk the work landing on your subscription." ;;
     *) die "$base answered HTTP $code to a one-token probe. Refusing to launch until that is understood." ;;
   esac
+
+  # A reading before the work starts, so this run has a "before" to difference
+  # against the one collect takes afterwards.
+  _sample_balance "$PROVIDER" 2>/dev/null
 
   local worker="sidecar-$(date +%H%M%S)"
   mkdir -p "$RUN" || die "cannot create $RUN"
@@ -499,6 +594,9 @@ cmd_collect() {
   [ "$found" = 1 ] || echo "(no worktree yet — the worker may still be starting)"
 
   echo
+  # And one after, which is what makes a difference computable at all.
+  _sample_balance "$provider" 2>/dev/null
+
   echo "== what it cost =="
   if [ -z "$session" ]; then
     echo "no session id yet, so nothing was priced."
@@ -577,13 +675,25 @@ cmd_stop() {
 }
 
 cmd_spend() {
-  local micro dollars
+  local micro dollars billed bdollars over=''
+  # Take a reading first, so `spend` is also the way to keep the log fed on a
+  # month where no worker has been collected.
+  _sample_balance "$PROVIDER" 2>/dev/null
   _month_to_date micro
   _usd dollars "$micro"
-  if [ "$micro" -gt $((CAP_USD * 1000000)) ]; then
-    echo "spend this month: \$$dollars of \$$CAP_USD — over the cap (advisory; nothing is stopped)"
+  [ "$micro" -gt $((CAP_USD * 1000000)) ] && over=' — over the cap (advisory; nothing is stopped)'
+  echo "estimated from the ledger: \$$dollars of \$$CAP_USD$over"
+  if _billed_mtd billed; then
+    _usd bdollars "$billed"
+    echo "billed by the provider:    \$$bdollars    (balance readings this month)"
+    echo "  The estimate prices token counts against a table maintained by hand;"
+    echo "  the billed figure is the provider's own balance falling. They answer"
+    echo "  different questions, so a gap between them is information, not a bug."
   else
-    echo "spend this month: \$$dollars of \$$CAP_USD"
+    echo "billed by the provider:    not yet — fewer than two balance readings this month."
+    echo "  One reading is a number, not a measurement. Run this again after a"
+    echo "  worker has been collected, or check that the provider profile has a"
+    echo "  balance_url at all."
   fi
 }
 
