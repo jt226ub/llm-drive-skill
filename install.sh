@@ -69,6 +69,23 @@ cp "$SRC/modules/sidecar/guard.sh"    "$CLAUDE_DIR/drive-sidecar/guard.sh"
 cp "$SRC/modules/sidecar/prices.conf" "$CLAUDE_DIR/drive-sidecar/prices.conf"
 cp "$SRC/modules/sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"
 chmod +x "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/guard.sh"
+# Written once and never overwritten, so an edited cap survives a reinstall.
+if [ ! -f "$CLAUDE_DIR/sidecar-config" ]; then
+  cat > "$CLAUDE_DIR/sidecar-config" <<"SCFG"
+# Settings for the sidecar module. Edit freely — install.sh writes this file
+# once and never overwrites it.
+#
+# The monthly spend cap in whole dollars. Advisory: it colours the status line
+# segment and stops nothing, by decision.
+#
+# A provider that does not bill in dollars — a model you host yourself, billed
+# in machine time — sets billing= in its provider profile instead, and this cap
+# does not apply to it.
+CAP_USD=80
+SCFG
+  echo "Wrote $CLAUDE_DIR/sidecar-config with the default spend cap."
+fi
+
 cp "$SRC/commands/sidecar-on.md"  "$CLAUDE_DIR/commands/sidecar-on.md"
 cp "$SRC/commands/sidecar-off.md" "$CLAUDE_DIR/commands/sidecar-off.md"
 

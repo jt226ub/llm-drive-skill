@@ -1024,7 +1024,7 @@ sc_fns() {
     set -u
     SELF_DIR="'"$ROOT/modules/sidecar"'"; LEDGER="'"$SCHOME/.claude/sidecar-ledger"'"; BALANCE="'"$SCHOME/.claude/sidecar-balance"'"
     die() { echo "die: $1" >&2; exit 9; }
-    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_to_micro()/,/^}/p;/^_billed_mtd()/,/^}/p;/^_price_age()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
+    eval "$(/usr/bin/sed -n "/^_conf()/,/^}/p;/^_price()/,/^}/p;/^_to_micro()/,/^}/p;/^_billed_mtd()/,/^}/p;/^_price_age()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
     '"$1"'
   '
 }
@@ -1368,6 +1368,69 @@ if [ ! -s "$SCHOME/.claude/sidecar-ledger" ] || ! grep -q sess-401 "$SCHOME/.cla
 else
   bad "and writes no ledger row for it"
 fi
+
+# ---------------------------------------------------------------------------
+group "Sidecar — a provider that is not DeepSeek, and does not bill in money"
+# ---------------------------------------------------------------------------
+# The whole module is meant to be provider-agnostic, and the case that proves it
+# is a self-hosted model: a different endpoint, a different model id, and no cost
+# per token at all. `collect` used to die on "no price for …" for exactly this,
+# which made a self-hosted endpoint unusable however agnostic everything else was.
+SCP="$SCHOME/.claude/providers-alt"; mkdir -p "$SCP"
+cat > "$SCP/selfhosted.conf" <<'PROF'
+base_url=http://127.0.0.1:8080/anthropic
+cred_var=ANTHROPIC_API_KEY
+cred_key=SELFHOSTED_TOKEN
+model=my-local-model
+model_alias=sonnet
+billing=none
+PROF
+assert_eq "http://127.0.0.1:8080/anthropic" \
+  "$(sc_fns '_conf u "'"$SCP/selfhosted.conf"'" base_url; echo "$u"')" \
+  "a profile with its own base URL reads back"
+assert_eq none "$(sc_fns '_conf b "'"$SCP/selfhosted.conf"'" billing; echo "$b"')" \
+  "and can declare that it does not bill per token"
+# No balance endpoint either: the keys are simply absent and sampling degrades.
+assert_eq 1 "$(sc_fns '_conf x "'"$SCP/selfhosted.conf"'" balance_url >/dev/null; echo $?')" \
+  "a provider with no balance endpoint reports absence rather than failing"
+
+# The cap is no longer baked into the script, because a provider billed in
+# machine time rather than dollars is the case this is meant to grow into.
+printf 'CAP_USD=25\n' > "$SCHOME/.claude/sidecar-config"
+assert_eq 25 "$(HOME="$SCHOME" bash -c 'eval "$(/usr/bin/sed -n "/^CONFIG=/,/^fi$/p" "'"$SC"'")"; echo $CAP_USD')" \
+  "the spend cap is read from sidecar-config"
+printf 'CAP_USD=not-a-number\n' > "$SCHOME/.claude/sidecar-config"
+assert_eq 80 "$(HOME="$SCHOME" bash -c 'eval "$(/usr/bin/sed -n "/^CONFIG=/,/^fi$/p" "'"$SC"'")"; echo $CAP_USD')" \
+  "and a non-numeric cap falls back to the default rather than breaking arithmetic"
+rm -f "$SCHOME/.claude/sidecar-config"
+
+# End to end, because the config read alone would not have caught the bug: the
+# module is copied somewhere its SELF_DIR resolves to a provider set with no
+# DeepSeek in it at all, and collect is run against a self-hosted provider that
+# bills nothing.
+ALT="$WORK/altmod"; mkdir -p "$ALT/providers"
+cp "$SC" "$ALT/sidecar.sh"; cp "$ROOT/modules/sidecar/prices.conf" "$ALT/prices.conf"
+cp "$SCP/selfhosted.conf" "$ALT/providers/selfhosted.conf"
+mkdir -p "$SCHOME/.claude/projects/alt" "$SCHOME/.claude/sidecar-run"
+printf '{"type":"assistant","message":{"id":"msg_A","usage":{"input_tokens":11,"cache_read_input_tokens":22,"output_tokens":33}}}\n' \
+  > "$SCHOME/.claude/projects/alt/sess-alt.jsonl"
+printf 'worker=walt\nprovider=selfhosted\nmodel=my-local-model\nsession=sess-alt\nrepo=%s\n' "$SCHOME/repo" \
+  > "$SCHOME/.claude/sidecar-run/walt.env"
+OUT="$(cd "$SCHOME/repo" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$ALT/sidecar.sh" collect --worker walt 2>&1)"
+case $OUT in
+  *"no per-token cost"*) ok "collect reports a self-hosted run instead of dying on a missing price" ;;
+  *) bad "collect reports a self-hosted run instead of dying on a missing price" "$OUT" ;;
+esac
+case $OUT in
+  *"in 11 (+22 cached)"*"out 33"*) ok "and still counts the tokens, which are the part that transfers" ;;
+  *) bad "and still counts the tokens" "$OUT" ;;
+esac
+if ! grep -q selfhosted "$SCHOME/.claude/sidecar-ledger" 2>/dev/null; then
+  ok "and writes no money row for a provider that charges none"
+else
+  bad "and writes no money row for a provider that charges none"
+fi
+rm -f "$SCHOME/.claude/sidecar-run/walt.env"
 
 # ---------------------------------------------------------------------------
 group "Sidecar — the status line segment the budget sensor prints"

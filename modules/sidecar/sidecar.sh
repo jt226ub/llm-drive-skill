@@ -39,7 +39,18 @@ LEDGER="$HOME/.claude/sidecar-ledger"
 BALANCE="$HOME/.claude/sidecar-balance"
 EXTRA="$HOME/.claude/statusline-extra"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CONFIG="$HOME/.claude/sidecar-config"
+# The monthly spend cap, in whole dollars. Advisory by decision: it colours the
+# status line and stops nothing. Read from CONFIG so it is not baked into the
+# script — a provider billed in something other than dollars is exactly the case
+# this module is meant to grow into.
 CAP_USD=80
+if [ -f "$CONFIG" ]; then
+  while IFS= read -r __cl || [ -n "$__cl" ]; do
+    __cl=${__cl%%#*}
+    case $__cl in CAP_USD=*) __cv=${__cl#*=}; __cv=${__cv// /}; case $__cv in ""|*[!0-9]*) ;; *) CAP_USD=$__cv ;; esac ;; esac
+  done < "$CONFIG"
+fi
 
 die() { echo "sidecar: $1" >&2; exit 1; }
 
@@ -626,8 +637,20 @@ cmd_collect() {
     return 1
   fi
 
+  # A provider that charges nothing per token — one you host yourself — has no
+  # price row and must not be treated as an error. Without this, `collect` died
+  # on `no price for …` and the work could not be reported at all, which made
+  # the module unusable with a self-hosted endpoint despite everything else
+  # about it being provider-agnostic.
+  local billing=tokens
+  _conf billing "$SELF_DIR/providers/$provider.conf" billing || billing=tokens
   local miss cached out pm pc po micro dollars
   _usage miss cached out "$tr"
+  if [ "$billing" != tokens ]; then
+    echo "$provider/$model · ${_USAGE_RESPONSES:-?} responses · no per-token cost ($provider bills as '$billing')"
+    echo "  Tokens are still counted: in $miss (+$cached cached), out $out."
+    return 0
+  fi
   _price pm pc po "$provider" "$model"
   micro=$(( miss * pm / 1000000 + cached * pc / 1000000 + out * po / 1000000 ))
   _usd dollars "$micro"

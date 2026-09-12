@@ -524,6 +524,51 @@ the diff before merging. **[unverified]** whether any rule spelling blocks it.
 Worth settling, because workers told "Commit it. Nothing else." attempted `git
 push` four times each.
 
+## 10d. Staying provider-agnostic, and the budget that is not money
+
+Audited for provider assumptions once DeepSeek was working. Every mention of it
+in the code is a comment explaining why something is the way it is; the only
+behavioural default is `--provider deepseek`, which a flag overrides. Two real
+leaks were found and closed.
+
+**`collect` died when a provider had no price row.** `_price` refuses rather
+than guesses, which is right, but that made a model you host yourself unusable:
+it costs nothing per token, so it has no row, so the work could not be reported
+at all. A profile now declares `billing=tokens` (the default) or `billing=none`,
+and a `none` provider gets its tokens counted and its work reported with no cost
+figure and no ledger row. Proven by copying the module somewhere its `SELF_DIR`
+resolves to a provider set containing no DeepSeek at all.
+
+**The cap was baked into the script.** `CAP_USD` now comes from
+`~/.claude/sidecar-config`, written once by install, with a non-numeric value
+falling back rather than breaking the arithmetic it feeds.
+
+### What a time budget would need
+
+**Not built — it needs an endpoint that exists first.** A self-hosted model on a
+rented machine is bounded by hours rather than dollars, and the shape is already
+close: the balance log is a sequence of readings with a timestamp and a number,
+and spend is the sum of the falls. Minutes remaining falls the same way.
+
+What is genuinely missing is only the naming and the units:
+
+- A profile key saying what the reading *is* — `billing=time`, with a
+  `balance_field` naming whatever the endpoint returns and a unit — so that
+  `spend` and the status line can say "3h 40m of 30h" rather than dollars.
+- A cap in the same unit, beside `CAP_USD` rather than replacing it, since a
+  machine can run both kinds of provider in the same month.
+- Nothing else. `_to_micro` becomes a units conversion rather than a currency
+  one, `_billed_mtd` is unchanged because falling is falling, and the
+  append-only log already keeps the raw readings so a first attempt at the
+  conversion can be redone from data rather than from memory.
+
+The one thing worth deciding before writing it: whether a fixed allowance that
+resets on a schedule — Kaggle's weekly GPU hours, say — is better modelled as a
+balance that falls, or as a window like the budget module's, which already knows
+how to talk about resets. That is a design question about the provider, not
+about this module, and it should be answered with the real endpoint in front of
+it.
+
 ## 11. Open questions
 
 Everything that was open in the first two drafts is now settled: one repository
