@@ -843,8 +843,19 @@ printf '%s\n' "$@" > "$CLAUDE_STUB_ARGV"
 [ -n "${CLAUDE_STUB_SLEEP:-}" ] && sleep "$CLAUDE_STUB_SLEEP"
 exit 0
 STUBEOF
-chmod +x "$RSTUB/launchctl" "$RSTUB/claude"
+# osascript is stubbed for the same reason launchctl is, and it matters more:
+# resume.sh posts a real macOS notification on the live-session branch, so an
+# unstubbed run put a notification — with a sound — into the Notification Centre
+# of whoever ran the suite, once per run. A test suite may not do that. Recording
+# the call instead turns the side effect into coverage.
+cat > "$RSTUB/osascript" <<'STUBEOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$OSASCRIPT_STUB_ARGV"
+exit 0
+STUBEOF
+chmod +x "$RSTUB/launchctl" "$RSTUB/claude" "$RSTUB/osascript"
 export CLAUDE_STUB_ARGV="$WORK/claude-argv.txt"
+export OSASCRIPT_STUB_ARGV="$WORK/osascript-argv.txt"
 
 run_resume() {                 # run_resume SESSION_ID
   # Separate statements on purpose: bash expands the whole word list of one
@@ -866,8 +877,16 @@ run_resume() {                 # run_resume SESSION_ID
 # and gates the tools rather than exiting anything. Its context is the expensive
 # thing and must not be thrown away: clear the gate, tell the person, launch
 # nothing.
-rm -f "$CLAUDE_STUB_ARGV"; : > "$RHOME/.claude/budget-resume.log"
+rm -f "$CLAUDE_STUB_ARGV" "$OSASCRIPT_STUB_ARGV"; : > "$RHOME/.claude/budget-resume.log"
 CLAUDE_STUB_ALIVE=sess-alive run_resume sess-alive
+if [ -f "$OSASCRIPT_STUB_ARGV" ]; then
+  case "$(cat "$OSASCRIPT_STUB_ARGV")" in
+    *"display notification"*"drive budget"*) ok "it notifies the person, since nothing can type into a live session for them" ;;
+    *) bad "it notifies the person" "$(cat "$OSASCRIPT_STUB_ARGV")" ;;
+  esac
+else
+  bad "it notifies the person, since nothing can type into a live session for them" "osascript was never called"
+fi
 if [ ! -f "$CLAUDE_STUB_ARGV" ]; then
   ok "a session that is still running is not relaunched"
 else
