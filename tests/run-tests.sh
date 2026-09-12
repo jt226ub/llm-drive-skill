@@ -977,6 +977,206 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+group "Sidecar — pricing a run without floating point"
+# ---------------------------------------------------------------------------
+# The money helpers are pure and are pulled straight out of the shipped script,
+# so these test the code that runs rather than a copy of it.
+SC="$ROOT/modules/sidecar/sidecar.sh"
+SCHOME="$WORK/schome"; mkdir -p "$SCHOME/.claude"
+sc_fns() {
+  SELF_DIR="$ROOT/modules/sidecar" LEDGER="$SCHOME/.claude/sidecar-ledger" \
+  bash -c '
+    set -u
+    SELF_DIR="'"$ROOT/modules/sidecar"'"; LEDGER="'"$SCHOME/.claude/sidecar-ledger"'"
+    die() { echo "die: $1" >&2; exit 9; }
+    eval "$(/usr/bin/sed -n "/^_price()/,/^}/p;/^_usage()/,/^}/p;/^_field()/,/^}/p;/^_usd()/,/^}/p;/^_month_to_date()/,/^}/p" "'"$SC"'")"
+    '"$1"'
+  '
+}
+
+# The collision that the first version of this had: the obvious call names the
+# caller's variables miss/cached/out, which are exactly what the function used
+# for its own locals, so eval assigned the locals and the caller got nothing.
+printf '{"x":1,"usage":{"input_tokens":10,"cache_creation_input_tokens":5,"cache_read_input_tokens":100,"output_tokens":7}}\n{"usage":{"input_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":2,"output_tokens":3}}\n' > "$WORK/tr.jsonl"
+assert_eq "16 102 10" "$(sc_fns '_usage miss cached out "'"$WORK/tr.jsonl"'"; echo "$miss $cached $out"')" \
+  "token counts survive being returned into the caller's own variable names"
+
+assert_eq "300000 6000 1200000" "$(sc_fns '_price a b c deepseek deepseek-flash; echo "$a $b $c"')" \
+  "a price is read out of prices.conf"
+assert_eq 9 "$(sc_fns '_price a b c deepseek nope 2>/dev/null; echo ok' >/dev/null 2>&1; echo $?)" \
+  "an unpriced model is refused rather than guessed at"
+
+for pair in "0 0.00" "4999 0.00" "5000 0.01" "999500 1.00" "1000000 1.00" "1999999 2.00" "80000001 80.00"; do
+  set -- $pair
+  assert_eq "$2" "$(sc_fns "_usd d $1; echo \$d")" "micro-USD $1 renders as \$$2"
+done
+
+printf '%s deepseek deepseek-flash 1 2 3 1500000 s1\n2026-08-01T10:00:00 deepseek deepseek-flash 1 2 3 9000000 s0\n' \
+  "$(date +%Y-%m)-12T10:00:00" > "$SCHOME/.claude/sidecar-ledger"
+assert_eq 1500000 "$(sc_fns '_month_to_date t; echo $t')" "the ledger totals this month and ignores older rows"
+
+# ---------------------------------------------------------------------------
+group "Sidecar — refusals, and the credential never reaching a command line"
+# ---------------------------------------------------------------------------
+SCSTUB="$WORK/scstub"; mkdir -p "$SCSTUB" "$SCHOME/repo"
+# start calls claude twice — once to launch, then `agents --json` to learn the
+# session id — so the stub records only the launch. Recording both overwrote the
+# launch argv with "agents --json" and the assertions below tested nothing.
+cat > "$SCSTUB/claude" <<'STUBEOF'
+#!/bin/bash
+if [ "$1" = agents ]; then echo '[]'; exit 0; fi
+printf '%s\n' "$@" > "$CLAUDE_ARGV"
+env > "$CLAUDE_ENV"
+echo "backgrounded · abcd1234 · $3"
+exit 0
+STUBEOF
+chmod +x "$SCSTUB/claude"
+# curl is stubbed because start now checks the credential against the provider
+# before launching anything. CURL_CODE is the HTTP status the provider "returns".
+cat > "$SCSTUB/curl" <<'STUBEOF'
+#!/bin/bash
+printf '%s' "${CURL_CODE:-200}"
+exit 0
+STUBEOF
+chmod +x "$SCSTUB/curl"
+export CLAUDE_ARGV="$WORK/sc-argv.txt" CLAUDE_ENV="$WORK/sc-env.txt" CURL_CODE=200
+sc() { ( cd "${SC_CWD:-$SCHOME/repo}" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$SC" "$@" ) 2>&1; }
+
+rm -f "$SCHOME/.claude/sidecar-mode"
+case "$(sc start --task x)" in
+  *"sidecar mode is off"*) ok "start refuses while the module is switched off" ;;
+  *) bad "start refuses while the module is switched off" "$(sc start --task x)" ;;
+esac
+touch "$SCHOME/.claude/sidecar-mode"
+case "$(sc start)" in
+  *"needs --task"*) ok "start refuses without a task" ;;
+  *) bad "start refuses without a task" ;;
+esac
+case "$(sc start --task x --provider nosuch)" in
+  *"no profile at"*) ok "start refuses a provider it has no profile for" ;;
+  *) bad "start refuses a provider it has no profile for" ;;
+esac
+rm -f "$SCHOME/.claude/sidecar-credentials"
+case "$(sc start --task x)" in
+  *"no credential file"*) ok "start refuses when the credential file is missing" ;;
+  *) bad "start refuses when the credential file is missing" ;;
+esac
+printf 'DEEPSEEK_API_KEY=sk-test-not-a-real-key\n' > "$SCHOME/.claude/sidecar-credentials"
+case "$(sc start --task x)" in
+  *"not in a git repository"*) ok "start refuses outside a git repository, since work comes back as a branch" ;;
+  *) bad "start refuses outside a git repository" "$(sc start --task x)" ;;
+esac
+
+git -C "$SCHOME/repo" init -q 2>/dev/null
+
+# The guard the module rests on. A background worker whose credential the
+# provider rejects does NOT fail: Claude Code retries and falls back to the
+# saved claude.ai login, finishing the work on the subscription and spending the
+# windows this module exists to protect. Measured — a worker launched with a
+# deliberately wrong key logged three 401s and completed the task anyway. So the
+# credential is checked before anything is launched, and a launch that cannot be
+# checked is refused rather than risked.
+rm -f "$CLAUDE_ARGV"
+CURL_CODE=401 sc start --task x >/dev/null 2>&1
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "a credential the provider rejects stops the launch"
+else bad "a credential the provider rejects stops the launch" "it launched anyway"; fi
+case "$(CURL_CODE=401 sc start --task x)" in
+  *"finishes the work on your claude.ai subscription"*) ok "and says why, in terms of what it would have cost" ;;
+  *) bad "and says why" "$(CURL_CODE=401 sc start --task x)" ;;
+esac
+rm -f "$CLAUDE_ARGV"
+CURL_CODE=000 sc start --task x >/dev/null 2>&1
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "an unreachable provider stops the launch too, rather than risking it"
+else bad "an unreachable provider stops the launch too"; fi
+rm -f "$CLAUDE_ARGV"
+CURL_CODE=500 sc start --task x >/dev/null 2>&1
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "so does any answer that is not a plain 200"
+else bad "so does any answer that is not a plain 200"; fi
+
+rm -f "$CLAUDE_ARGV" "$CLAUDE_ENV"
+sc start --task 'write a thing' >/dev/null
+if [ -f "$CLAUDE_ARGV" ]; then
+  # The credential must travel in the environment and nowhere else. On the
+  # command line it would sit in `ps` for every account on the machine to read.
+  if grep -q 'sk-test-not-a-real-key' "$CLAUDE_ARGV"; then
+    bad "the credential never reaches claude's command line" "$(cat "$CLAUDE_ARGV")"
+  else
+    ok "the credential never reaches claude's command line"
+  fi
+  if grep -q 'ANTHROPIC_AUTH_TOKEN=sk-test-not-a-real-key' "$CLAUDE_ENV"; then
+    ok "it travels in the environment instead"
+  else
+    bad "it travels in the environment instead"
+  fi
+  if grep -q 'ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic' "$CLAUDE_ENV"; then
+    ok "and the base URL comes from the provider profile"
+  else
+    bad "and the base URL comes from the provider profile"
+  fi
+  ARGV="$(cat "$CLAUDE_ARGV" | tr '\n' ' ')"
+  case $ARGV in
+    *"--model sonnet"*) ok "--model is the provider profile's Claude alias, never its own model id" ;;
+    *) bad "--model is the provider profile's Claude alias" "$ARGV" ;;
+  esac
+  case $ARGV in
+    *"--permission-mode auto"*) ok "and the permission mode is not narrowed below the orchestrator's" ;;
+    *) bad "and the permission mode is not narrowed" "$ARGV" ;;
+  esac
+  case $ARGV in
+    *deepseek-flash*) bad "a provider model id never reaches --model" "$ARGV" ;;
+    *) ok "a provider model id never reaches --model, which would kill the session" ;;
+  esac
+else
+  for t in "the credential never reaches claude's command line" "it travels in the environment instead" \
+           "and the base URL comes from the provider profile" "--model is the provider profile's Claude alias" \
+           "and the permission mode is not narrowed" "a provider model id never reaches --model"; do bad "$t"; done
+fi
+
+# A credential can also stop working part-way through a run, which the preflight
+# cannot see. collect refuses to price such a run rather than record the
+# subscription's tokens as the provider's pennies.
+mkdir -p "$SCHOME/.claude/projects/p"
+printf '{"type":"assistant","message":{"usage":{"input_tokens":5,"output_tokens":5}}}\n{"error":"authentication_error"}\n' \
+  > "$SCHOME/.claude/projects/p/sess-401.jsonl"
+printf 'worker=w401\nprovider=deepseek\nmodel=deepseek-flash\nsession=sess-401\nrepo=%s\n' "$SCHOME/repo" \
+  > "$SCHOME/.claude/sidecar-run/w401.env" 2>/dev/null || { mkdir -p "$SCHOME/.claude/sidecar-run"; printf 'worker=w401\nprovider=deepseek\nmodel=deepseek-flash\nsession=sess-401\nrepo=%s\n' "$SCHOME/repo" > "$SCHOME/.claude/sidecar-run/w401.env"; }
+OUT="$(sc collect --worker w401)"
+case $OUT in
+  *"authentication error"*) ok "collect refuses to price a run that hit an authentication error" ;;
+  *) bad "collect refuses to price a run that hit an authentication error" "$OUT" ;;
+esac
+if [ ! -s "$SCHOME/.claude/sidecar-ledger" ] || ! grep -q sess-401 "$SCHOME/.claude/sidecar-ledger" 2>/dev/null; then
+  ok "and writes no ledger row for it"
+else
+  bad "and writes no ledger row for it"
+fi
+
+# ---------------------------------------------------------------------------
+group "Sidecar — the status line segment the budget sensor prints"
+# ---------------------------------------------------------------------------
+rm -f "$BHOME/.claude/statusline-extra"
+OUT="$(sensor <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/p"},
+ "rate_limits":{"five_hour":{"used_percentage":20,"resets_at":1738425600}}}
+PAYLOAD
+)"
+case $OUT in
+  *"API"*) bad "no segment appears when no module has written one" "$OUT" ;;
+  *) ok "no segment appears when no module has written one" ;;
+esac
+printf 'API $1.23/$80\n' > "$BHOME/.claude/statusline-extra"
+OUT="$(sensor <<'PAYLOAD'
+{"model":{"display_name":"Opus 5"},"workspace":{"current_dir":"/tmp/p"},
+ "rate_limits":{"five_hour":{"used_percentage":20,"resets_at":1738425600}}}
+PAYLOAD
+)"
+case $OUT in
+  *"5h 20%"*"API \$1.23/\$80"*) ok "a module's segment is appended after the windows" ;;
+  *) bad "a module's segment is appended after the windows" "$OUT" ;;
+esac
+rm -f "$BHOME/.claude/statusline-extra"
+
+# ---------------------------------------------------------------------------
 group "Installing the budget module"
 # ---------------------------------------------------------------------------
 B2E="$WORK/b2e"; mkdir -p "$B2E"

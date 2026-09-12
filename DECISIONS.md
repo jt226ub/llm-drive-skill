@@ -344,3 +344,79 @@ Twice today a conclusion of mine needed correcting by evidence rather than
 reasoning, both times in this decision's neighbourhood. The lesson worth keeping
 is the cheap one: a documented default is a claim about the software, not about
 the machine in front of you, and the transcripts were one grep away.
+
+---
+
+## D7 — The delegate is a skill over bash, not an MCP server
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** `modules/sidecar/DESIGN.md` drew the delegate as an MCP tool, so
+that delegating would appear in the transcript as a typed tool call.
+
+**Decision.** It is a shell script the orchestrator runs with Bash. A Bash call
+is already a tool call in the transcript, which was most of what MCP bought.
+
+**Rejected.** *An MCP server.* Speaking MCP means JSON-RPC framing and parsing,
+and this project ships no JSON runtime on principle — jq was removed because a
+missing tool failed silently. Hand-writing the protocol in bash is a worse
+version of the same bet: several hundred lines of parser whose failure mode is
+a wedged stdio loop. MCP remains open if the transcript ergonomics ever justify
+that cost.
+
+**Consequences.** No live progress inside a tool panel; watching a worker means
+`claude attach`. The module gains nothing to maintain beyond five small files,
+and `sidecar.sh` is runnable and debuggable by hand, which an MCP server is not.
+
+---
+
+## D8 — A worker's credential is proved before launch, because a rejected one does not fail
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** The module's entire claim is that a worker spends the provider's
+money and none of the claude.ai subscription's rate-limit windows. Setting
+`ANTHROPIC_BASE_URL` and a credential variable was assumed to be enough.
+
+It is not, and the measurement is unambiguous. A background worker launched with
+a deliberately wrong key logged **three 401s from the provider and then completed
+the task anyway** — Claude Code retries a rejected credential and falls back to
+the saved claude.ai login. The work lands on the subscription while the ledger
+prices it as the provider's pennies: the module silently spends the exact thing
+it exists to protect, and under-reports it by a factor of hundreds.
+
+`claude -p` does not do this — a wrong key there returns a synthetic result with
+zero tokens. The fallback belongs to the background/interactive path, which is
+the path this module uses.
+
+**Decision.** `start` proves the credential against the provider's own endpoint
+before launching anything: one request, one token, and the launch is refused
+unless it answers HTTP 200. A rejection, an unreachable host and any other status
+all refuse. `collect` additionally refuses to price a run whose transcript shows
+an authentication error, which is the case a preflight cannot see because the
+credential stopped working part-way through.
+
+**Rejected.**
+
+- *Trusting the environment variables.* That is what was done, and it is how the
+  bug shipped through a live end-to-end test that looked like a success: the
+  worker produced a correct commit, so every visible signal said it worked.
+- *Detecting it afterwards from the transcript's message ids.* Tried, and wrong:
+  Claude Code stamps its own `msg_...` ids regardless of which endpoint served
+  the request, so a known-DeepSeek transcript and a suspected-Anthropic one look
+  identical. A conclusion was drawn from that and had to be retracted within the
+  hour. The provider's own HTTP status is the only signal that cannot lie.
+- *`--bare`, which never reads OAuth and so cannot fall back.* It would give the
+  guarantee structurally, but it also skips hooks, skills and CLAUDE.md — the
+  worker would lose the drive contract and the inherited permissions that D6's
+  neighbours established as the point of running a real session. Worth
+  revisiting if the preflight ever proves insufficient.
+
+**Consequences.** `curl` becomes a dependency of this module, and its absence is
+a refusal rather than a skipped check — an unverifiable launch is the failure the
+guard exists to prevent. Every launch costs a handful of provider tokens before
+any work starts. In exchange, "delegated" stops being an assumption.
+
+**The lesson worth keeping:** a live end-to-end test that produces the right
+artefact proves the work happened, not where it happened. Money moved is a
+different claim from work done, and it needs its own evidence.

@@ -59,6 +59,18 @@ chmod +x "$CLAUDE_DIR/drive-budget/sensor.sh" "$CLAUDE_DIR/drive-budget/gate.sh"
 cp "$SRC/commands/budget-on.md"  "$CLAUDE_DIR/commands/budget-on.md"
 cp "$SRC/commands/budget-off.md" "$CLAUDE_DIR/commands/budget-off.md"
 
+# The sidecar module. Same shape again: the parts go in, the flag switches them
+# on. It registers no hook and no status line of its own — it reaches the status
+# line through the budget sensor's extension point — so installing it changes
+# nothing about how a session behaves until /sidecar-on.
+mkdir -p "$CLAUDE_DIR/drive-sidecar/providers"
+cp "$SRC/modules/sidecar/sidecar.sh"  "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
+cp "$SRC/modules/sidecar/prices.conf" "$CLAUDE_DIR/drive-sidecar/prices.conf"
+cp "$SRC/modules/sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"
+chmod +x "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
+cp "$SRC/commands/sidecar-on.md"  "$CLAUDE_DIR/commands/sidecar-on.md"
+cp "$SRC/commands/sidecar-off.md" "$CLAUDE_DIR/commands/sidecar-off.md"
+
 # Written once and never overwritten, so a tuned threshold survives a reinstall.
 if [ ! -f "$CLAUDE_DIR/budget-config" ]; then
   cat > "$CLAUDE_DIR/budget-config" <<'CFG'
@@ -200,3 +212,4 @@ echo "Done. Restart Claude Code, then:"
 echo "  /drive       run one task under the contract"
 echo "  /drive-on    standing mode until /drive-off"
 echo "  /budget-on   pause and document before a rate limit, until /budget-off"
+echo "  /sidecar-on  delegate work to a third-party model, until /sidecar-off"

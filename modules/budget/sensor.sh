@@ -209,5 +209,19 @@ fi
 
 [ -f "$HOME/.claude/budget-mode" ] || LINE="$LINE · budget off"
 
+# One segment for another module to fill. settings.json holds exactly one
+# statusLine and this sensor owns it, so a second module cannot have one of its
+# own; rather than fight over the slot, it writes a line here and this prints it.
+# The sidecar module's month-to-date API spend is the first user.
+#
+# First line only, and nothing is interpreted: whatever is in the file is what
+# appears, ANSI colour included. A missing file is the normal case and says
+# nothing.
+EXTRA="$HOME/.claude/statusline-extra"
+if [ -f "$EXTRA" ]; then
+  IFS= read -r EXTRA_LINE < "$EXTRA" 2>/dev/null || EXTRA_LINE=''
+  [ -n "$EXTRA_LINE" ] && LINE="${LINE:+$LINE · }$EXTRA_LINE"
+fi
+
 echo "$LINE"
 exit 0

@@ -1,6 +1,10 @@
 # sidecar — design
 
-**Status: design only. Nothing here is built.**
+**Status: built and installed.** `sidecar.sh`, one provider profile, a price
+table, and the two slash commands. What is written below as intention has been
+built except where a section says otherwise; §10a, §10b and §10c are the record
+of what running it actually taught, and they overrule the earlier sections
+wherever they disagree.
 
 The third-party-model module of the drive skill. It delegates coding work from a
 Claude Code session to a model on another provider — DeepSeek, Kimi, GLM,
@@ -445,6 +449,40 @@ background workers created one unprompted — `inherited-noodling-kazoo`, then
 `worktree-humming-sauteeing-castle`. Two for two is a default, not chance. §2's
 worktree hand-off needs no machinery, only a step that merges the branch after
 the orchestrator has reviewed the diff.
+
+## 10c. Building it — 2026-09-12
+
+**It works, and the first version of it was quietly broken in the one way that
+mattered.** A live delegation produced exactly the right artefact: DeepSeek
+wrote `mul()  { echo $(( $1 * $2 )); }` in the existing one-line style,
+committed it to a worktree it made itself, and `collect` priced the run at
+$0.03. Every visible signal said success.
+
+But a helper returning its value by `eval "$1=..."` had a local named the same
+as the variable the caller asked for, so the credential came back empty and was
+never noticed. And an empty or rejected credential does not stop a background
+worker: **Claude Code retries and falls back to the saved claude.ai login.**
+Measured directly — a worker launched with a deliberately wrong key logged three
+401s from DeepSeek and completed the task anyway. So the module could spend the
+subscription windows it exists to protect and report the cost as pennies.
+
+`start` now proves the credential against the provider before launching, and
+refuses on anything but HTTP 200. `collect` refuses to price a run whose
+transcript shows an authentication error. D8 has the reasoning.
+
+**Two things the attempt to diagnose this got wrong**, recorded because they
+cost more than the bug did. Message-id shape does not identify the endpoint:
+Claude Code stamps `msg_...` regardless of who served the request, and a
+conclusion drawn from that had to be retracted. And DeepSeek's `/user/balance`
+lags — it read `5.00` through several confirmed runs — so it cannot attribute a
+single run either.
+
+**Measured while building**, against a real worker transcript: 1,354,188 cached
+input tokens against 38,252 missed, a **97% cache hit rate**, visible through
+the Anthropic shim as `cache_read_input_tokens`. That answers open question 3
+from the other direction — the earlier probes read zero only because they were
+cold. Caching is real, it is reported, and it is most of why a delegated run
+costs cents.
 
 ## 11. Open questions
 

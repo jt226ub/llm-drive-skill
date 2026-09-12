@@ -34,6 +34,17 @@ rmdir "$CLAUDE_DIR/drive-budget" 2>/dev/null || true
 rm -f "$CLAUDE_DIR/budget-run/parked-"* "$CLAUDE_DIR/budget-run/calls" \
       "$CLAUDE_DIR/budget-run/warned" 2>/dev/null || true
 rmdir "$CLAUDE_DIR/budget-run" 2>/dev/null || true
+
+rm -f "$CLAUDE_DIR/sidecar-mode" "$CLAUDE_DIR/statusline-extra"
+rm -f "$CLAUDE_DIR/commands/sidecar-on.md" "$CLAUDE_DIR/commands/sidecar-off.md"
+rm -f "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/prices.conf"
+rm -f "$CLAUDE_DIR/drive-sidecar/providers/"*.conf
+rmdir "$CLAUDE_DIR/drive-sidecar/providers" "$CLAUDE_DIR/drive-sidecar" 2>/dev/null || true
+rm -f "$CLAUDE_DIR/sidecar-run/"*.env "$CLAUDE_DIR/sidecar-run/"*.collected 2>/dev/null || true
+rmdir "$CLAUDE_DIR/sidecar-run" 2>/dev/null || true
+# sidecar-credentials and sidecar-ledger stay, like budget-config and the
+# settings backups: one holds a secret this script has no business deleting,
+# the other is a record of money that was actually spent.
 # budget-config and budget-resume.log stay, the same way settings.json backups
 # do: one holds thresholds someone may have tuned, the other is the only record
 # of what the unattended resumes did.
