@@ -65,9 +65,10 @@ cp "$SRC/commands/budget-off.md" "$CLAUDE_DIR/commands/budget-off.md"
 # nothing about how a session behaves until /sidecar-on.
 mkdir -p "$CLAUDE_DIR/drive-sidecar/providers"
 cp "$SRC/modules/sidecar/sidecar.sh"  "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
+cp "$SRC/modules/sidecar/guard.sh"    "$CLAUDE_DIR/drive-sidecar/guard.sh"
 cp "$SRC/modules/sidecar/prices.conf" "$CLAUDE_DIR/drive-sidecar/prices.conf"
 cp "$SRC/modules/sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"
-chmod +x "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
+chmod +x "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/guard.sh"
 cp "$SRC/commands/sidecar-on.md"  "$CLAUDE_DIR/commands/sidecar-on.md"
 cp "$SRC/commands/sidecar-off.md" "$CLAUDE_DIR/commands/sidecar-off.md"
 
@@ -106,10 +107,12 @@ if [ "$CLAUDE_DIR" = "$HOME/.claude" ]; then
   HOOK_CMD='"$HOME/.claude/hooks/drive-mode.sh"'
   GATE_CMD='"$HOME/.claude/drive-budget/gate.sh"'
   SENSOR_CMD='"$HOME/.claude/drive-budget/sensor.sh"'
+  SCGUARD_CMD='"$HOME/.claude/drive-sidecar/guard.sh"'
 else
   HOOK_CMD="\"$CLAUDE_DIR/hooks/drive-mode.sh\""
   GATE_CMD="\"$CLAUDE_DIR/drive-budget/gate.sh\""
   SENSOR_CMD="\"$CLAUDE_DIR/drive-budget/sensor.sh\""
+  SCGUARD_CMD="\"$CLAUDE_DIR/drive-sidecar/guard.sh\""
   echo "NOTE: non-default CLAUDE_DIR — the hooks and the /drive-on, /drive-off,"
   echo "      /budget-on and /budget-off commands still read their flags, the"
   echo "      skill and the budget state from \$HOME/.claude. Edit those files"
@@ -175,6 +178,7 @@ RC=0
 register UserPromptSubmit "$HOOK_CMD"        drive-mode.sh "the drive hook"           || RC=1
 register UserPromptSubmit "$GATE_CMD prompt" gate.sh       "the budget prompt hook"   || RC=1
 register PreToolUse       "$GATE_CMD tool"   gate.sh       "the budget tool gate"     || RC=1
+register PreToolUse       "$SCGUARD_CMD"     guard.sh      "the sidecar push guard"   || RC=1
 
 # The status line is the sensor, and settings.json holds only one. Ours goes in
 # only when the slot is free; an existing status line — anyone's, including an

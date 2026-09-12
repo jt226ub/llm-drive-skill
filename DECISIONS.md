@@ -420,3 +420,57 @@ any work starts. In exchange, "delegated" stops being an assumption.
 **The lesson worth keeping:** a live end-to-end test that produces the right
 artefact proves the work happened, not where it happened. Money moved is a
 different claim from work done, and it needs its own evidence.
+
+---
+
+## D9 — Two push guards that fail differently, because the permission rule alone does not hold
+
+**Date** 2026-09-12 · **Status** accepted
+
+**Context.** A sidecar worker hands work back as a branch for the dispatching
+session to review and merge. Pushing skips that review and does it unattended.
+`--disallowed-tools "Bash(git push *)"` was assumed to prevent it; a worker
+pushed to a real remote anyway, verified against a bare repository that received
+the commit.
+
+**Decision.** Three layers, and only the first two are relied on.
+
+1. *A refusing `pre-push`, reached through `GIT_CONFIG_COUNT`/`KEY_0`/`VALUE_0`
+   setting `core.hooksPath` at launch.* Environment is inherited by every git
+   process however it is spelled, so the invocation form is irrelevant. The
+   repository's own hooks are symlinked in beside it, because `core.hooksPath`
+   replaces the hooks directory rather than adding to it and a repo's
+   `pre-commit` would otherwise stop running inside the worker.
+2. *A `PreToolUse` hook that denies a worker's Bash calls mentioning a git
+   push.* The permissions reference recommends exactly this — "to inspect the
+   full command text with your own logic before it runs, use a PreToolUse hook".
+   It identifies a worker by matching the session id against the launcher's own
+   records, and does nothing at all otherwise, because it runs in every session.
+3. *The permission rule*, kept because it costs nothing, and the brief telling
+   the worker what the hand-off looks like.
+
+**Rejected.**
+
+- *The permission rule as the guarantee.* The reference names `Bash(git push *)`
+  as its own example of a rule's limits, listing `git -C . push`,
+  `git -c … push` and `git 'push'` among what it misses. The original rule was
+  also simply the wrong syntax — `Bash(git push:*)` matches a command starting
+  literally with `git push:`, which never occurs.
+- *Sandbox network isolation.* Enforces regardless of command text, but the
+  worker needs the provider's API, so it means an allowlist — and it does
+  nothing about a filesystem-path remote.
+- *Giving the worker a clone with no remote.* Absolute, and it replaces the
+  worktree hand-off with a fetch-from-the-worker model: the most machinery, and
+  it discards a worktree that Claude Code currently provides free.
+
+**Consequences.** Neither guard is sufficient alone and that is the point: the
+git hook cannot see a publish that is not git, and the hook cannot see an
+obfuscated command. Both fail open — a session the second cannot identify is
+treated as not a worker, because gating an ordinary session over a failed lookup
+would be worse than the bug being prevented.
+
+**Verified live**, which the earlier claim never was: a worker told "Pushing is
+part of the task" attempted `git push -u origin worktree-append-mango`, was
+refused twice, left the remote empty, and still committed its work to the
+branch. In isolation the git hook also refused all five invocation forms the
+permissions reference lists as defeating a rule.

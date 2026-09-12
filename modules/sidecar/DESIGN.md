@@ -503,7 +503,18 @@ The cost itself was never far out: 19,142 missed input, 700,345 cached, 2,542
 output prices at **$0.013** for that run, which is what a dozen requests of ~55K
 context on a cheap model should cost.
 
-**The push guard is unproven and is documented as such.** A worker launched with
+**The multi-line prompt bug, which cost two live tests.** Prepending the
+hand-off brief to the task made the launch prompt multi-line, and the session
+then started with an **empty prompt** and sat idle. Two workers in a row did
+nothing at all while reporting `state: blocked`, and both runs were read as
+"inconclusive" rather than as a bug, because a stalled worker and a worker with
+nothing to do look the same from outside. The brief now rides in
+`--append-system-prompt`, which is where a standing instruction belongs anyway.
+The lesson is narrower than it looks: *inconclusive* twice in a row about the
+same thing is a finding, not a run of bad luck.
+
+**The push guard was unproven; it now holds, by a different mechanism.** D9 has
+the reasoning. What follows is the record of it failing first. A worker launched with
 `--disallowed-tools "Bash(git push:*)"` pushed to a real remote anyway — checked
 against a bare repository, which received the commit. Anthropic's docs use two
 rule spellings and the space form is untested here, so the flag is still passed

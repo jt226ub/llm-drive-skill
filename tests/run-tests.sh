@@ -1158,13 +1158,96 @@ if [ -f "$CLAUDE_ARGV" ]; then
     *) bad "a deny rule for push is passed" "$ARGV" ;;
   esac
   case $ARGV in
-    *"Do not push"*) ok "and the worker is told the shape of the hand-off in words too" ;;
-    *) bad "and the worker is told the shape of the hand-off" "$ARGV" ;;
+    *"--append-system-prompt"*"Do not push"*) ok "the hand-off brief rides in the system prompt, not in front of the task" ;;
+    *) bad "the hand-off brief rides in the system prompt (prepending it left the session with an empty prompt)" "$ARGV" ;;
   esac
+  # The guard that actually holds. GIT_CONFIG_* is inherited by any git process
+  # however it is spelled, so unlike a permission rule it is not defeated by
+  # `git -C .`, `git -c …`, an absolute path, or `sh -c`.
+  if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$CLAUDE_ENV" 2>/dev/null; then
+    ok "a hooks path is injected into the worker's environment"
+  else
+    bad "a hooks path is injected into the worker's environment"
+  fi
+  GUARD=$(/usr/bin/sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$CLAUDE_ENV" 2>/dev/null)
+  if [ -n "$GUARD" ] && [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then
+    ok "and it holds an executable pre-push that refuses"
+  else
+    bad "and it holds an executable pre-push that refuses" "guard=$GUARD"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+group "Sidecar — the push guard, against the forms a permission rule misses"
+# ---------------------------------------------------------------------------
+# The permissions reference names Bash(git push *) as its own example of a
+# rule's limits: it misses `git -C . push`, `git -c … push` and `git 'push'`.
+# A worker did push past that rule to a real remote. These are the same forms,
+# against the git-level guard.
+if [ -n "${GUARD:-}" ] && [ -x "$GUARD/pre-push" ]; then
+  GW="$WORK/gitguard"; mkdir -p "$GW"
+  ( cd "$GW" && git init -q && git init -q --bare r.git && git remote add origin "$GW/r.git" \
+      && printf 'x\n' > a && git add -A && git -c user.email=t@t -c user.name=t commit -qm init ) 2>/dev/null
+  pushed=0
+  for form in "git push origin HEAD:main" \
+              "git -C $GW push origin HEAD:main" \
+              "$(command -v git) push origin HEAD:main" \
+              "sh -c 'git push origin HEAD:main'" \
+              "git -c push.default=current push origin HEAD:main"; do
+    ( cd "$GW" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$GUARD" \
+        eval "$form" ) >/dev/null 2>&1
+    n=$(git -C "$GW/r.git" log --oneline --all 2>/dev/null | wc -l | tr -d ' ')
+    [ "$n" != 0 ] && pushed=1
+  done
+  if [ "$pushed" = 0 ]; then
+    ok "every invocation form a permission rule misses is still refused"
+  else
+    bad "every invocation form a permission rule misses is still refused" "something reached the remote"
+  fi
+  # And the repo's own hooks survive, because core.hooksPath replaces the
+  # directory rather than adding to it.
+  if [ -e "$GUARD/pre-commit" ] || [ ! -e "$(git -C "$ROOT" rev-parse --git-path hooks)/pre-commit" ]; then
+    ok "the repository's own hooks are carried into the guard directory"
+  else
+    bad "the repository's own hooks are carried into the guard directory"
+  fi
 else
-  for t in "the credential never reaches claude's command line" "it travels in the environment instead" \
-           "and the base URL comes from the provider profile" "--model is the provider profile's Claude alias" \
-           "and the permission mode is not narrowed" "a provider model id never reaches --model"; do bad "$t"; done
+  skip "every invocation form a permission rule misses is still refused (no guard dir)"
+  skip "the repository's own hooks are carried into the guard directory"
+fi
+
+# ---------------------------------------------------------------------------
+group "Sidecar — the PreToolUse guard on worker sessions"
+# ---------------------------------------------------------------------------
+GHOME="$WORK/ghome"; mkdir -p "$GHOME/.claude/sidecar-run"
+printf 'worker=w1\nprovider=deepseek\nmodel=deepseek-flash\nsession=sess-worker\nrepo=/tmp\n' \
+  > "$GHOME/.claude/sidecar-run/w1.env"
+guard() {                      # guard SESSION TOOL COMMAND
+  printf '{"session_id":"%s","tool_name":"%s","tool_input":{"command":"%s"}}' "$1" "$2" "$3" \
+    | HOME="$GHOME" bash "$ROOT/modules/sidecar/guard.sh"
+}
+gdecision() {
+  [ "$HAVE_PY" = 1 ] || return 1
+  python3 -c '
+import json,sys
+s=sys.stdin.read().strip()
+print("silent" if not s else json.loads(s)["hookSpecificOutput"].get("permissionDecision","?"))'
+}
+assert_eq deny   "$(guard sess-worker Bash 'git push origin main' | gdecision)"  "a worker pushing is denied"
+assert_eq deny   "$(guard sess-worker Bash 'git -C . push origin x' | gdecision)" "and so is the form the permission rule misses"
+assert_eq silent "$(guard sess-worker Bash 'git commit -m x' | gdecision)"       "a worker committing is left alone"
+assert_eq silent "$(guard sess-worker Read 'anything' | gdecision)"              "non-Bash tools are left alone"
+# The gate must do nothing in an ordinary session. It runs in every one.
+assert_eq silent "$(guard some-other-session Bash 'git push origin main' | gdecision)" \
+  "a session that is not a worker pushes freely — this hook runs in all of them"
+rm -f "$GHOME/.claude/sidecar-run/w1.env"
+assert_eq silent "$(guard sess-worker Bash 'git push origin main' | gdecision)" \
+  "and with no worker records at all it stays silent rather than guessing"
+# The launch assertions above are inside `if [ -f "$CLAUDE_ARGV" ]`, which is
+# closed there. If the launch never happened, none of them ran, so say so once
+# rather than leaving a silently short run.
+if [ ! -f "$CLAUDE_ARGV" ]; then
+  bad "the worker was launched at all (every launch assertion above was skipped)"
 fi
 
 # A credential can also stop working part-way through a run, which the preflight

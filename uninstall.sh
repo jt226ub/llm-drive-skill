@@ -37,9 +37,11 @@ rmdir "$CLAUDE_DIR/budget-run" 2>/dev/null || true
 
 rm -f "$CLAUDE_DIR/sidecar-mode" "$CLAUDE_DIR/statusline-extra"
 rm -f "$CLAUDE_DIR/commands/sidecar-on.md" "$CLAUDE_DIR/commands/sidecar-off.md"
-rm -f "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/prices.conf"
+rm -f "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/prices.conf" \
+      "$CLAUDE_DIR/drive-sidecar/guard.sh"
 rm -f "$CLAUDE_DIR/drive-sidecar/providers/"*.conf
 rmdir "$CLAUDE_DIR/drive-sidecar/providers" "$CLAUDE_DIR/drive-sidecar" 2>/dev/null || true
+rm -rf "$CLAUDE_DIR/sidecar-run/"*.hooks 2>/dev/null || true
 rm -f "$CLAUDE_DIR/sidecar-run/"*.env "$CLAUDE_DIR/sidecar-run/"*.collected 2>/dev/null || true
 rmdir "$CLAUDE_DIR/sidecar-run" 2>/dev/null || true
 # sidecar-credentials and sidecar-ledger stay, like budget-config and the
@@ -57,7 +59,7 @@ if [ -s "$SETTINGS" ]; then
   cp "$SETTINGS" "$BAK"
   set +e
   CHANGED=0; FAILED=0
-  for spec in "UserPromptSubmit drive-mode.sh" "UserPromptSubmit gate.sh" "PreToolUse gate.sh"; do
+  for spec in "UserPromptSubmit drive-mode.sh" "UserPromptSubmit gate.sh" "PreToolUse gate.sh" "PreToolUse guard.sh"; do
     settings_deregister_hook "$SETTINGS" "${spec#* }" "${spec%% *}"
     case $? in
       0) CHANGED=1 ;;

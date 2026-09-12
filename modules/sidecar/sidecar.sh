@@ -308,15 +308,49 @@ cmd_start() {
   # has. The brief says the same thing in words, because a worker that knows the
   # shape of the hand-off writes a better branch than one that keeps hitting a
   # wall it does not understand.
-  local brief="Your work will be reviewed as a branch by the session that sent you this task, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left.
+  # The brief goes in the system prompt, not in front of the task. Prepending it
+  # made the prompt multi-line and the session then started with an EMPTY prompt
+  # and sat idle: two workers in a row did nothing at all and looked merely
+  # "blocked", which cost two live tests that were read as inconclusive before
+  # the cause was found. It is also the right place for it — this is a standing
+  # instruction about how work is handed back, not part of any one task.
+  local brief="Your work will be reviewed as a branch by the session that dispatched you, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left."
+  # A refusing pre-push hook, reached through the environment rather than the
+  # repository's configuration, so nothing in the user's repo is modified.
+  #
+  # This is the guard that actually holds. A permission rule does not: the
+  # permissions reference names `Bash(git push *)` as its own example of a rule's
+  # limits, listing `git -C . push`, `git -c … push` and `git 'push'` as things
+  # it misses, and a worker did push past the rule to a real remote. Measured
+  # against the same five forms, the hook refused every one and the remote stayed
+  # empty, because GIT_CONFIG_* is inherited by any git process however it is
+  # spelled.
+  #
+  # The repository's own hooks are symlinked in beside it, since core.hooksPath
+  # replaces the hooks directory rather than adding to it — without this, a
+  # repo's pre-commit lint would silently stop running inside the worker.
+  local guard="$RUN/$worker.hooks" repo_hooks
+  mkdir -p "$guard" || die "cannot create $guard"
+  repo_hooks=$(git rev-parse --git-path hooks 2>/dev/null)
+  if [ -n "$repo_hooks" ] && [ -d "$repo_hooks" ]; then
+    for h in "$repo_hooks"/*; do
+      [ -f "$h" ] || continue
+      case ${h##*/} in pre-push) continue ;; esac
+      ln -sf "$h" "$guard/${h##*/}" 2>/dev/null
+    done
+  fi
+  printf '#!/bin/sh\necho "sidecar: push refused. This worker hands work back as a branch for review; the session that dispatched it merges." >&2\nexit 1\n' \
+    > "$guard/pre-push" || die "cannot write the pre-push guard"
+  chmod +x "$guard/pre-push"
 
-"
   local out
   out=$(env "$cred_var=$key" ANTHROPIC_BASE_URL="$base" \
+        GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
         claude --bg --name "$worker" --model "$alias" \
                --permission-mode "$PERMISSION_MODE" \
                --disallowed-tools "Bash(git push *)" \
-               "$brief$TASK" < /dev/null 2>&1) \
+               --append-system-prompt "$brief" \
+               "$TASK" < /dev/null 2>&1) \
     || die "claude refused to start the worker: $out"
 
   local sid=''
@@ -466,6 +500,10 @@ cmd_stop() {
     case ${line%%=*} in session) session=${line#*=} ;; esac
   done < "$f"
   [ -n "$session" ] && claude stop "${session%%-*}" 2>&1 | head -1
+  # The guard directory holds only our pre-push and symlinks to the repo's own
+  # hooks, so removing it takes nothing of the user's with it.
+  rm -f "$RUN/$WORKER.hooks"/* 2>/dev/null
+  rmdir "$RUN/$WORKER.hooks" 2>/dev/null
   rm -f "$f" "$RUN/$WORKER.collected"
   echo "stopped $WORKER"
 }
