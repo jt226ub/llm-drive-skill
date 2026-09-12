@@ -1,51 +1,29 @@
 # Handoff — session record, and a brief for the next session
 
-## ⇒ NEXT: **build `modules/sidecar/launch.sh`, and nothing before it**
+## ⇒ NEXT: **decide whether the sidecar earns its keep, before adding to it**
 
-Everything else in the sidecar module hangs off the launcher, and every design
-question that could have changed its shape is now answered against a live
-provider. `modules/sidecar/DESIGN.md` §10a and §10b are the evidence; read those
-two sections before the rest of the document, because they overrule three things
-the earlier sections say.
+The module is built, installed and exercised against a live provider. Nothing in
+it is half-finished. What has *not* happened is a real piece of work being
+delegated and the result being good enough to merge — every run so far has been
+a probe written to test the machinery.
 
-The command shape is already verified working. This exact form created a file,
-committed it, and messaged the orchestrator back:
+So the next session should use it in anger once, on something small and real,
+and answer two things the tests cannot:
 
-    cd <worktree-or-repo>
-    env ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic \
-        ANTHROPIC_AUTH_TOKEN="$DEEPSEEK_API_KEY" \
-      claude --bg --name ds-worker --model sonnet --permission-mode auto "<task>"
+1. **Is the output worth reviewing?** A cheaper model doing work that the
+   orchestrator must re-derive is a loss. Delegate something whose output is
+   cheap to check — a mechanical refactor, a test to write, a doc sweep — and
+   see whether reviewing it took less than doing it.
+2. **Does the one-worker limit bite?** It is enforced now. If the answer is that
+   you spend the time waiting, that is a finding about the design and not about
+   the code.
 
-Four things about it are load-bearing and were each learned the hard way:
+Only then is it worth building more. The obvious candidates, in order, are
+auto-collect when a worker goes idle (spend is silently unrecorded if you forget
+to collect), and the `billing=time` provider once a Kaggle endpoint exists —
+§10d of `modules/sidecar/DESIGN.md` says what that needs and what was already
+settled about its shape.
 
-1. **`--model sonnet`, never `ANTHROPIC_MODEL=deepseek-flash`.** Claude Code
-   validates model names against its own catalog before any request leaves the
-   machine. A bare provider id kills the session outright — *"There's an issue
-   with the selected model"* — even though that id returns HTTP 200 from the
-   endpoint by curl. `deepseek-flash[1m]` survives the main turn but still trips
-   the check on auxiliary calls. DeepSeek's own mapping turns `claude-sonnet*`
-   into `deepseek-flash`, so the alias is the right lever.
-2. **`--permission-mode auto`, matching the orchestrator.** Do not pass
-   `acceptEdits`; it is *stricter*, and it stalls the worker on the commit with
-   nobody to answer — which also stops it draining queued messages.
-3. **No `CLAUDE_CONFIG_DIR`.** Permissions resolve from the config directory and
-   the working directory, so the default gives the worker exactly the
-   orchestrator's permissions in that folder, plus the drive hook, for free. An
-   isolated directory inherits nothing.
-4. **No worktree machinery.** Claude Code makes one for background sessions by
-   itself — two for two across the runs. The launcher needs a merge step after
-   review, not a worktree step.
-
-Then, in order: the cost ledger (`~/.claude/sidecar-ledger`, append-only, priced
-from a table in this repo against token counts from the worker's transcript —
-**not** from Claude Code's own figure, which overstated by ~35×), the
-`statusline-extra` extension point in `modules/budget/sensor.sh`, and the
-`/sidecar-on` and `/sidecar-off` commands with an installer stanza.
-
-The key is at `~/.claude/sidecar-credentials`, mode 0600, `DEEPSEEK_API_KEY=…`.
-**It is temporary and the owner intends to rotate it** once the module is built;
-read it from that file rather than hard-coding it anywhere. The repository is
-public — no credential may enter it.
 
 ## What this session did
 
@@ -133,6 +111,31 @@ Until then, assume load-bearing.
 built-in's way regardless: the gate never exits non-zero so it cannot block the
 continuation prompt, and the parked marker expires on its own so a continuation
 cannot land on a closed gate.
+
+## The sidecar module, built 2026-09-12
+
+`sidecar.sh start | status | collect | stop | spend` delegates a task to a worker
+on a third-party endpoint, running inside its own Claude Code session. Verified
+live against DeepSeek: it wrote correct code in the surrounding style, committed
+to a worktree it made itself, and handed it back.
+
+Guards, each proved by a live run rather than by reading:
+
+- **The credential is proved before launch.** A worker whose credential is
+  rejected does not fail — Claude Code retries and falls back to the claude.ai
+  login, so the work lands on the subscription and is priced as pennies.
+  Measured: three 401s and the task completed anyway.
+- **Pushing is refused** by a `pre-push` reached through `GIT_CONFIG_*`, which
+  holds against every invocation form a permission rule misses. A worker told
+  "pushing is part of the task" was refused twice and left the remote empty.
+- **The budget gate does not shut workers down.** They spend another provider's
+  money, so they are informed rather than denied.
+- **One worker at a time**, enforced.
+
+Cost is an estimate — the provider exposes no pricing or usage endpoint (D11 has
+the 404 list) — reconciled against balance readings kept in an append-only log.
+Both figures are shown, because a gap between them is information.
+
 
 ## What is in the way
 

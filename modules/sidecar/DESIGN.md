@@ -562,12 +562,27 @@ What is genuinely missing is only the naming and the units:
   append-only log already keeps the raw readings so a first attempt at the
   conversion can be redone from data rather than from memory.
 
-The one thing worth deciding before writing it: whether a fixed allowance that
-resets on a schedule — Kaggle's weekly GPU hours, say — is better modelled as a
-balance that falls, or as a window like the budget module's, which already knows
-how to talk about resets. That is a design question about the provider, not
-about this module, and it should be answered with the real endpoint in front of
-it.
+**Answered, 2026-09-12:** it is a fixed allowance that resets, and the value can
+be queried — by the endpoint if it carries it, and by the Kaggle CLI regardless.
+
+That settles the shape. It is a **window**, not a balance, so it belongs closer
+to the budget module's model than to the ledger's: a window has a size, a
+consumed fraction and a reset time, and the interesting question is "how much is
+left before it resets", which is what the status line already says for the
+five-hour and weekly windows.
+
+The consequence for the reading log is small but worth writing down now. A
+balance is differenced because nothing reports spend; an allowance that reports
+its own remaining value needs no differencing at all — the reading *is* the
+answer, and summing falls across a reset boundary would be wrong, because the
+allowance going back up is a reset and not a top-up. So a `billing=time`
+provider reads its remaining allowance directly and does not go through
+`_billed_mtd`.
+
+The CLI being able to pull the value matters as a fallback: if the served
+endpoint does not carry the allowance, the profile can name a command to run
+instead of a URL to fetch, which keeps the reading source a per-provider detail
+rather than a fork in the module.
 
 ## 11. Open questions
 
