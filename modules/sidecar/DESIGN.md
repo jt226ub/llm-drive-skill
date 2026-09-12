@@ -395,6 +395,57 @@ printed `deepseek-flash · worker · no plan limits in this session` — the fix
 from earlier today working in exactly the case it was written for, on a real
 non-subscription session rather than a synthetic payload.
 
+## 10b. Second run — the round trip, and permissions
+
+**The worker answered. Two-way peer messaging with a non-Anthropic worker is
+proved.** Unprompted by anything but its task, `ds-worker2` called `SendMessage`
+back to the orchestrator:
+
+> Task complete. Model ID: claude-sonnet-5. hello.txt was created with contents
+> "sidecar" and committed successfully (commit a5abbfa, "Add hello.txt", on
+> branch worktree-humming-sauteeing-castle in an isolated worktree).
+
+Verified independently rather than taken on its word: `a5abbfa` exists on that
+branch, `hello.txt` contains `sidecar`, one file changed. §5's third channel is
+real in both directions.
+
+**Permissions are inherited already — and that settles the isolation question
+against `CLAUDE_CONFIG_DIR`.** Permission resolution keys off the config
+directory and the working directory, not session identity, so a worker launched
+without `CLAUDE_CONFIG_DIR` reads the same `~/.claude/settings.json` as the
+orchestrator and the same `.claude/settings.json` as whatever folder it runs in.
+The first run's stall was not a missing permission; it was `--permission-mode
+acceptEdits` being *stricter* than the orchestrator's `auto`. On this machine
+there are no `permissions` rules, no project `.claude/`, and no managed
+settings, so all latitude comes from `auto` mode's classifier — and passing
+`--permission-mode auto` let the worker commit without a prompt.
+
+So the launcher **does not give the worker its own config directory.** The
+earlier plan to isolate it and re-supply the drive contract via
+`--append-system-prompt` is dropped: an isolated config directory inherits
+nothing — no permissions, no hooks, so no drive contract, and no skills. The
+decision in §2 was "the same permissions a normal Claude Code session has in
+that project", and inheriting the default config directory *is* that, exactly,
+with no machinery. The launcher passes the orchestrator's own permission mode
+and nothing else.
+
+The cost of that choice, stated plainly: the worker has the orchestrator's
+latitude wherever it is pointed. Point it at a directory deliberately. And the
+reverse of the cross-session warning applies — never route work through the
+worker that the orchestrator's own permissions would refuse.
+
+**The worker cannot tell what it is.** It reported `claude-sonnet-5` in good
+faith, because that is the name it was given; nothing in its context says
+DeepSeek. So the launcher must tell it in its prompt when that matters, and the
+ledger must never ask it — provider and model come from the launcher, as §10a
+already concluded for a different reason.
+
+**The worktree is Claude Code's own behaviour, not ours to build.** Both
+background workers created one unprompted — `inherited-noodling-kazoo`, then
+`worktree-humming-sauteeing-castle`. Two for two is a default, not chance. §2's
+worktree hand-off needs no machinery, only a step that merges the branch after
+the orchestrator has reviewed the diff.
+
 ## 11. Open questions
 
 Everything that was open in the first two drafts is now settled: one repository
@@ -405,23 +456,21 @@ secrets live.
 What is left is not design but evidence, and none of it can be gathered without
 a provider key:
 
-1. **Does the worker reply?** Delivery to it is proved (§10a); the return leg is
-   not. A cheaper model has to *choose* to call `SendMessage`, and may need that
-   spelled out in its prompt. Test it against a worker that is not blocked on a
-   permission prompt. If the reply leg fails, the module still works as
-   request/response delegation and §5 loses a row.
-2. **Does Claude Code render MCP progress notifications in the tool panel?** If
+1. **Does Claude Code render MCP progress notifications in the tool panel?** If
    it does, live progress comes free. If not, `claude attach` is the way to
    watch. Either way the delegate must emit them or the call is aborted.
-3. **Does the Anthropic shim surface DeepSeek's cache hit/miss counts?** Both
+2. **Does the Anthropic shim surface DeepSeek's cache hit/miss counts?** Both
    probes reported `cache_creation_input_tokens: 0` and
    `cache_read_input_tokens: 0` — but both were cold, so a miss is exactly what
    should have happened and nothing is settled. Re-run against a warm prefix. If
    the shim reports zeros regardless, the caching may still be happening and
    billing cheaper while being invisible to us, and the ledger will overstate.
-4. **Does the worktree happen on its own?** The probe worker made one unprompted.
-   Find out whether that is Claude Code's default for background sessions before
-   building anything to force it.
-5. **Do the other providers' endpoints behave?** Only DeepSeek has been run.
+3. **Do the other providers' endpoints behave?** Only DeepSeek has been run.
 
-None of these change the topology. The build can start.
+Answered by the runs in §10a and §10b: the worker starts and works, peer
+messaging works in both directions, the model must be named with a Claude alias,
+the cost figure must be computed here, permissions are inherited from the
+default config directory, and the worktree comes for free.
+
+None of what is left changes the topology. The build can start, and its first
+piece is the launcher.
