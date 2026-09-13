@@ -318,6 +318,18 @@ Established from first-party documentation or run on this machine:
   `ANTHROPIC_BASE_URL`/`ANTHROPIC_AUTH_TOKEN` set reported the credential taking
   over from the claude.ai login. No `ANTHROPIC_*` variable leaks from a parent
   session into subprocesses.
+- **But not by every `--bg` launch.** Measured 2026-09-13 on Claude Code
+  2.1.270: a `claude --bg` started from a shell inside another `--bg` session,
+  with the pair in its environment — inherited or `env -i` — made no request to
+  the endpoint (a listener on 127.0.0.1 and a live tunnel both saw nothing) and
+  answered on the claude.ai login, with the real system prompt's 40k cached
+  tokens in its usage. `claude -p` with the same environment reached the
+  endpoint. `claude --bg --settings '{"env":{…}}'` reached it too. So the
+  launcher passes the pair twice: in the environment and in a 0600 settings
+  file beside the worker's records (D14). The 2026-09-12 run in §10a, from an
+  interactive orchestrator, did reach DeepSeek; the condition that breaks the
+  environment route is not pinned down beyond "launched from inside a `--bg`
+  session", and the settings route holds in every case measured.
 - `claude --bg` produces a peer session that `ListAgents` lists and
   `claude attach`/`logs` reach.
 - `claude -p` **rejects `--bg`** — they are alternative shapes.

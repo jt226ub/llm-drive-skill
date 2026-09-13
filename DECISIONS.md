@@ -604,3 +604,40 @@ reading silently never happened. The `__` prefix convention adopted after the
 first two occurrences does not prevent this, because the helpers use `__` names
 too. Only a name the helper does not use works. Every call site that returns
 through `eval "$1=..."` is worth reading with that in mind.
+
+
+## D14 — The endpoint pair travels in a settings file as well as the environment
+**Date** 2026-09-13 · **Status** accepted
+
+**Context.** The launch put `ANTHROPIC_BASE_URL` and the credential variable in
+the worker's environment and nowhere else, so that the credential never appears
+on a command line (`ps` is readable by every account on the machine). On
+2026-09-13 a worker launched that way from a shell inside another `--bg`
+session — the Anthropic Sidecar project's orchestrator, a background job — made
+no request to its endpoint and finished the task on the claude.ai login, the
+exact failure the preflight exists to prevent, and the preflight cannot see it
+because the preflight is a `curl`, not a `claude`. Three controlled runs against
+a listener on this machine: `claude -p` with the pair in the environment reached
+it; `claude --bg` with the pair in the environment, inherited or `env -i`, did
+not; `claude --bg --settings` with the pair in a settings `env` block did.
+
+**Decision.** Write `{"env":{"<cred_var>":"…","ANTHROPIC_BASE_URL":"…"}}` to
+`~/.claude/sidecar-run/<worker>.settings.json`, mode 0600, and pass it with
+`--settings`. The environment is still set, so a Claude Code that honours it
+loses nothing. `stop` removes the file with the worker's other records.
+
+**Rejected.**
+
+- *A JSON literal on the command line.* Works, and puts the credential in `ps`
+  — the property the environment route was chosen for.
+- *A repository-level `.claude/settings.local.json`.* Would redirect every
+  session in that repository, including the orchestrator, which the design
+  forbids (§3: the orchestrator never talks to a non-Anthropic endpoint).
+- *Switching the worker to `claude -p`.* Honours the environment, but is not a
+  peer session: no `ListAgents`, no `SendMessage`, no transcript to collect.
+
+**Consequences.** The credential lives in one more 0600 file for the worker's
+lifetime. A test now asserts the file's location, contents, mode and JSON
+validity, that a quote or backslash in a credential survives the escaping, and
+that `stop` removes it. Whether a future Claude Code honours the environment for
+`--bg` again does not matter; the settings route is the one relied on.

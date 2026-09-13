@@ -76,6 +76,15 @@ _conf() {
   [ -n "$__out" ]
 }
 
+# _json_string VALUE — VALUE with the two characters a JSON string cannot carry
+# bare escaped, on stdout. Enough for a credential and a URL; not a JSON encoder.
+_json_string() {
+  local __s=$1
+  __s=${__s//\\/\\\\}
+  __s=${__s//\"/\\\"}
+  printf '%s' "$__s"
+}
+
 # _credential VARNAME KEY — read a secret from the 0600 file outside the repo.
 _credential() {
   local __v=$1 __key=$2 __line __out=''
@@ -517,10 +526,26 @@ Your work will be reviewed as a branch by the session that dispatched you, so co
     > "$guard/pre-push" || die "cannot write the pre-push guard"
   chmod +x "$guard/pre-push"
 
+  # The endpoint pair travels twice: in the environment, and in a settings file
+  # passed with --settings. A background session does not always take
+  # ANTHROPIC_BASE_URL and the credential from its environment — measured
+  # 2026-09-13: launched from a shell inside another --bg session, with and
+  # without an inherited environment, the worker answered on the claude.ai login
+  # and the endpoint saw no request, while `claude -p` with the same variables
+  # reached it. The settings `env` block was honoured in every case measured
+  # (D14). A file rather than a JSON literal on the command line, so the
+  # credential still never appears in `ps`; 0600, beside the worker's records,
+  # removed by `stop`.
+  local settings="$RUN/$worker.settings.json"
+  ( umask 077 && printf '{"env":{"%s":"%s","ANTHROPIC_BASE_URL":"%s"}}\n' \
+      "$cred_var" "$(_json_string "$key")" "$(_json_string "$base")" > "$settings" ) \
+    || die "cannot write $settings"
+
   local out
   out=$(env "$cred_var=$key" ANTHROPIC_BASE_URL="$base" \
         GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
         claude --bg --name "$worker" --model "$alias" \
+               --settings "$settings" \
                --permission-mode "$PERMISSION_MODE" \
                --disallowed-tools "Bash(git push *)" \
                --append-system-prompt "$brief" \
@@ -693,7 +718,7 @@ cmd_stop() {
   # hooks, so removing it takes nothing of the user's with it.
   rm -f "$RUN/$WORKER.hooks"/* 2>/dev/null
   rmdir "$RUN/$WORKER.hooks" 2>/dev/null
-  rm -f "$f" "$RUN/$WORKER.collected"
+  rm -f "$f" "$RUN/$WORKER.collected" "$RUN/$WORKER.settings.json"
   echo "stopped $WORKER"
 }
 

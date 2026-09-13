@@ -1219,6 +1219,35 @@ if [ -f "$CLAUDE_ARGV" ]; then
   else
     bad "and the base URL comes from the provider profile"
   fi
+  # The same pair also rides in a settings file, because a --bg session does not
+  # always take it from the environment (measured 2026-09-13, D14). A file and
+  # not a JSON literal, so the command-line assertion above still holds.
+  SETTINGS_ARG=$(/usr/bin/grep -A1 -x -- '--settings' "$CLAUDE_ARGV" 2>/dev/null | tail -1)
+  case $SETTINGS_ARG in
+    "$SCHOME/.claude/sidecar-run/sidecar-"*.settings.json)
+      ok "--settings names a file beside the worker's records, since a --bg session may ignore its environment" ;;
+    *) bad "--settings names a file beside the worker's records" "got [$SETTINGS_ARG]" ;;
+  esac
+  if [ -f "$SETTINGS_ARG" ] \
+     && grep -q '"ANTHROPIC_AUTH_TOKEN":"sk-test-not-a-real-key"' "$SETTINGS_ARG" \
+     && grep -q '"ANTHROPIC_BASE_URL":"https://api.deepseek.com/anthropic"' "$SETTINGS_ARG"; then
+    ok "and that file carries the credential and the base URL in a settings env block"
+  else
+    bad "the settings file carries the credential and the base URL" "$(cat "$SETTINGS_ARG" 2>/dev/null)"
+  fi
+  [ -f "$SETTINGS_ARG" ] && assert_json "$SETTINGS_ARG" "and it is valid JSON"
+  SETTINGS_MODE=$(stat -f '%Lp' "$SETTINGS_ARG" 2>/dev/null || stat -c '%a' "$SETTINGS_ARG" 2>/dev/null)
+  assert_eq 600 "$SETTINGS_MODE" "and it is readable by this user alone"
+  # A value with a quote or a backslash in it must not break the file. Written by
+  # the same helper the launcher uses, read back by an independent parser.
+  if [ "$HAVE_PY" = 1 ]; then
+    ESC_FN=$(/usr/bin/sed -n '/^_json_string() {/,/^}/p' "$SC")
+    printf '{"env":{"K":"%s"}}\n' "$(bash -c "$ESC_FN"'; _json_string "$1"' _ 'a"b\\c')" > "$WORK/esc.json"
+    ESC_BACK=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"]["K"])' "$WORK/esc.json" 2>/dev/null)
+    assert_eq 'a"b\\c' "$ESC_BACK" "a credential with a quote and a backslash survives the JSON escaping"
+  else
+    skip "the JSON escaping round trip (no python3 to validate with)"
+  fi
   ARGV="$(cat "$CLAUDE_ARGV" | tr '\n' ' ')"
   case $ARGV in
     *"--model sonnet"*) ok "--model is the provider profile's Claude alias, never its own model id" ;;
@@ -1266,6 +1295,18 @@ if [ -f "$CLAUDE_ARGV" ]; then
     ok "and it holds an executable pre-push that refuses"
   else
     bad "and it holds an executable pre-push that refuses" "guard=$GUARD"
+  fi
+  # stop takes the settings file with the worker's other records: it holds the
+  # credential, and nothing reads it once the session is gone. On a record of
+  # its own, because the next group inspects the launched worker's guard dir.
+  printf 'worker=w-stop\nprovider=deepseek\nmodel=deepseek-flash\nsession=\nrepo=%s\n' "$SCHOME/repo" \
+    > "$SCHOME/.claude/sidecar-run/w-stop.env"
+  printf '{"env":{}}\n' > "$SCHOME/.claude/sidecar-run/w-stop.settings.json"
+  sc stop --worker w-stop >/dev/null 2>&1
+  if [ ! -e "$SCHOME/.claude/sidecar-run/w-stop.settings.json" ] && [ ! -e "$SCHOME/.claude/sidecar-run/w-stop.env" ]; then
+    ok "stop removes the settings file along with the worker's record"
+  else
+    bad "stop removes the settings file along with the worker's record" "$(ls "$SCHOME/.claude/sidecar-run")"
   fi
 fi
 

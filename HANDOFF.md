@@ -139,6 +139,11 @@ Both figures are shown, because a gap between them is information.
 
 ## What is in the way
 
+- **2026-09-13: a `--bg` worker can ignore the environment and run on the
+  subscription.** Measured from inside another `--bg` session; the launcher now
+  also passes the endpoint pair through `--settings` (D14). Every earlier run
+  that was believed to be on DeepSeek should be read against the balance log,
+  not the ledger, for the same reason.
 - **The DeepSeek balance is $5.00, not the $80/month cap.** Keep probes small
   until the owner tops it up or rotates to a funded key.
 - **Three questions remain open, none of them structural** — whether Claude Code
