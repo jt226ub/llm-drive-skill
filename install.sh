@@ -66,6 +66,7 @@ cp "$SRC/commands/budget-off.md" "$CLAUDE_DIR/commands/budget-off.md"
 mkdir -p "$CLAUDE_DIR/drive-sidecar/providers"
 cp "$SRC/modules/sidecar/sidecar.sh"  "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
 cp "$SRC/modules/sidecar/guard.sh"    "$CLAUDE_DIR/drive-sidecar/guard.sh"
+cp "$SRC/modules/sidecar/antigravity-quota.py" "$CLAUDE_DIR/drive-sidecar/antigravity-quota.py"
 cp "$SRC/modules/sidecar/prices.conf" "$CLAUDE_DIR/drive-sidecar/prices.conf"
 cp "$SRC/modules/sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"
 # Rules of engagement per provider, and the hook that puts a provider's

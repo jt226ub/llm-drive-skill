@@ -37,6 +37,20 @@ pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live s
 argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
 Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
 
+## The Antigravity worker is an iterative loop, and its quota is readable — 2026-09-14 (D20)
+
+`say --worker NAME --task "…"` runs the next turn of an Antigravity worker's conversation in its worktree
+(`--conversation <id>` from the last envelope; `turns=` in the run record; `collect` says "conversation turn
+N"). Measured basis: follow-ups within ~2 min read the earlier turns from cache on both Flash 3.8 high and Pro
+3.1 high; after 10 min nothing is cached. `quota --provider antigravity-cli` drives the CLI's interactive
+`/usage` under a pty (`modules/sidecar/antigravity-quota.py`) and `spend` shows the reading; 0% refuses
+`start`. The CLI's first-run wizard (theme, data-use consent, workspace trust) was completed by the user's
+decision on 2026-09-14 (consent left enabled); the script refuses to answer it on another machine. Stub
+tests cover both, and both ran live the same evening: `quota` read "weekly 98% left (refresh 167h3m), 5-hour 94% left" in
+12 s and `spend` reused it in 0.6 s; a two-turn conversation on Flash 3.8 high read the scratch repo in turn 1 (8 s, 42k
+input tokens, 0 cached) and, 20 s later through `say`, added `capitalize_words` with a test and committed `215d62c` in
+turn 2 (69 s, 130k input tokens with 146k cache reads). 398 tests pass; the day-counter drift remains.
+
 ## The roster: four models with the user's roles, `start --model`, and a roster line per prompt — 2026-09-14 (D19)
 
 The user set the roles (DESIGN §16): Gemini 3.8 Flash = fast non-interactive coder; Gemini 3.1 Pro = slower

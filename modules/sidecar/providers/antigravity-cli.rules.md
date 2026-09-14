@@ -6,16 +6,19 @@ front of the task the CLI receives. The rest of this file is documentation.
 
 ## Orchestrator
 
-- Non-interactive: the CLI runs one task to completion in its own worktree, answers, and
-  exits — no messaging, no attach; a new task is a new `start`. Everything it needs goes
-  in --task (paths, definition of done, tests to run, the commit message).
+- An iterative loop, not a live session: `start` runs one turn to completion in its own
+  worktree and exits; `say --worker NAME --task "..."` runs the next turn of the same
+  conversation there (context intact). No attach, no interrupting a turn. Put the full
+  context in the first --task (paths, definition of done, tests); then ask.
+- Send the next `say` within ~2 minutes of `collect`: the earlier turns are then read from
+  cache (cheap quota); after ~10 minutes idle the whole conversation is re-sent at full price.
 - Gemini 3.8 Flash (default, at its highest reasoning effort): a fast non-interactive
   coder for small and larger tasks. `-medium` / `-low` only to save quota.
 - Gemini 3.1 Pro (`--model gemini-3.1-pro-high`; `-low` only to save quota): a slower
   non-interactive coding expert — small and larger tasks, help with task and project
   planning, review, and brainstorming; the answer comes back in `collect` under "what it said".
-- Free within the plan: a quota refreshed every 5 h up to a weekly cap, no money; Google
-  publishes no numbers, and a run that hits the quota marks it spent for 5 h (`spend`).
+- Free within the plan: a 5-hour and a weekly quota shared by Flash and Pro, no money;
+  `sidecar.sh quota` reads them and `spend` shows the last reading; 0% refuses `start`.
 - One worker at a time is enforced. Collect and review the branch before the next.
 
 ## Worker

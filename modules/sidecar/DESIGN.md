@@ -809,3 +809,35 @@ Rejected: one profile per model (the rules would repeat and `/sidecar-on` would 
 name an effort); putting the whole roster's rules in every prompt (the 15-line cap is
 there for a reason — one line per other provider is the compromise).
 
+## 17. The Antigravity worker becomes an iterative loop; the plan quota becomes readable — 2026-09-14
+
+**Conversation.** The CLI keeps a whole exchange under a conversation id, and a later
+`agy -p … --conversation <id>` in a new process continues it with the context intact.
+Measured: a follow-up sent within 2 minutes reads the earlier turns from cache (12k of
+21k input tokens on both Flash 3.8 high and Pro 3.1 high); after 10 minutes idle nothing
+is cached and the whole conversation is re-sent (33k tokens). Quota "is consumed
+proportionally to the cost of the tokens" (the CLI's own /usage text), so that matters.
+`say --worker NAME --task TEXT` runs the next turn in the same worktree with the same
+model: the run record keeps `turns=` and `conversation=`, the previous envelope is
+appended to `NAME.turns`, `collect` shows "conversation turn N" and how to continue,
+`stop` clears it all. `say` refuses while a turn is running, when the last turn left
+no envelope (nothing to continue), on a Claude Code worker (those are reached with
+`claude attach`), and at a cap. The brief and the Worker rules ride only in turn 1;
+the conversation holds them. The rules of engagement now say: put the full context in
+the first `--task`, then ask, and send the next `say` within ~2 minutes of `collect`.
+
+**Quota.** `antigravity-quota.py` drives the interactive CLI under a pseudo-terminal in
+an empty folder of ours (`~/.claude/sidecar-run/agy-quota`, trusted once), sends
+`/usage`, and parses the GEMINI MODELS group's weekly and five-hour bars into one line
+(`weekly=97.71 weekly_reset=167h21m five_hour=94.34 five_hour_reset=4h21m`). Nothing
+headless reports these; the CLI fetches them through an internal endpoint and logs no
+numbers. Readings go to `~/.claude/sidecar-quota-readings`; `quota` forces one,
+`spend` reuses a reading younger than 10 minutes (a reading costs ~10 s), and a fresh
+reading at 0% on either bar is the cap. The script stops, exit 3, if the CLI's
+first-run wizard is up — the theme and the data-use consent are the user's to answer,
+never a script's — and exit 4 when not signed in.
+
+Rejected: the long-lived `--input-format stream-json` process (it delivered a turn's
+result one turn late twice in scratch); summarise-and-restart follow-ups (both Gemini
+models' fallback design; unnecessary once cache reads were measured); reading quota
+from the CLI's log or cache files (there is nothing there).

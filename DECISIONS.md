@@ -758,3 +758,26 @@ validates model names against its own catalogue, DESIGN §1).
 
 **Consequences.** The hook reads every `.conf` on every prompt (a handful of small
 files); a provider without `roster=` is simply not listed.
+
+## D20 — An Antigravity worker is an iterative loop (`say` continues its conversation); the plan quota is read from `/usage`
+
+**Date** 2026-09-14 · **Status** accepted · extends D18
+
+**Context.** The user wants the Gemini models usable for planning, review and iterative
+coding, which needs follow-ups with context intact and cheap. Measured: `--conversation`
+continues a headless run in a new process, and the earlier turns are read from cache
+when the next turn comes within ~2 minutes (not after 10). The plan's quota is shown only
+by the interactive `/usage` panel.
+
+**Decision.** `say --worker NAME --task TEXT` runs the next turn in the worker's worktree
+under its conversation id; the run record counts turns; `collect` names the turn. A
+pty-driven `antigravity-quota.py` reads `/usage`; `quota` forces a reading, `spend` shows
+the last one (refreshed when older than 10 min), and 0% on either bar refuses `start`.
+The first-run wizard is never answered by the script.
+
+**Rejected.** A persistent stream-json process (results arrived late); summarise-and-
+restart follow-ups (unneeded); calling this "interactive" (a turn cannot be interrupted;
+the TPU and DeepSeek workers can).
+
+**Consequences.** Long pauses between turns cost a full re-send; the rules say so. A
+`spend` on a stale reading takes ~10 s. The onboarding consent stays the user's.

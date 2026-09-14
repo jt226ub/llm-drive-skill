@@ -2,6 +2,7 @@
 # Delegate coding work to a model on another provider, inside Claude Code.
 #
 #   sidecar.sh start  --task TEXT [--provider NAME] [--model SLUG] [--permission-mode MODE]
+#   sidecar.sh say    --worker NAME --task TEXT   the next turn of an Antigravity worker's conversation
 #   sidecar.sh status
 #   sidecar.sh collect --worker NAME     the diff it produced, and what it cost
 #   sidecar.sh stop    --worker NAME
@@ -487,6 +488,54 @@ _quota_spent_at() {
   eval "$1=\$__qlast"
 }
 
+
+# The plan's quota for an Antigravity provider, read from the CLI's interactive
+# /usage panel by antigravity-quota.py (nothing headless reports it). Readings
+# are kept (EPOCH PROVIDER weekly five_hour weekly_reset five_hour_reset) and
+# one younger than QUOTA_FRESH_S is reused, since a reading costs ~10 s.
+QUOTA_READINGS="$HOME/.claude/sidecar-quota-readings"
+QUOTA_FRESH_S=600
+# _quota_reading TSVAR WVAR FVAR WRVAR FRVAR PROVIDER — the newest reading, or 1.
+_quota_reading() {
+  local __qts __qprov __qw __qf __qwr __qfr __l=''
+  [ -f "$QUOTA_READINGS" ] || return 1
+  while read -r __qts __qprov __qw __qf __qwr __qfr; do
+    [ "$__qprov" = "$6" ] || continue
+    __l="$__qts $__qw $__qf $__qwr $__qfr"
+  done < "$QUOTA_READINGS"
+  [ -n "$__l" ] || return 1
+  set -- "$1" "$2" "$3" "$4" "$5" $__l
+  eval "$1=\$6; $2=\$7; $3=\$8; $4=\$9; $5=\${10}"
+}
+# _sample_quota PROVIDER [force] — take a reading unless a fresh one exists.
+_sample_quota() {
+  local __prof="$SELF_DIR/providers/$1.conf" __h='' __ts __w __f __wr __fr __out __k __v __rw='' __rf='' __rwr='-' __rfr='-'
+  _conf __h "$__prof" harness || return 1
+  [ "$__h" = antigravity-cli ] || return 1
+  if [ "${2:-}" != force ] && _quota_reading __ts __w __f __wr __fr "$1" && [ $(( $(date +%s) - __ts )) -lt "$QUOTA_FRESH_S" ]; then return 0; fi
+  __out=$(python3 "$SELF_DIR/antigravity-quota.py" 2>&1) || { echo "quota: $__out" >&2; return 1; }
+  for __k in $__out; do
+    __v=${__k#*=}
+    case $__k in weekly=*) __rw=$__v ;; five_hour=*) __rf=$__v ;; weekly_reset=*) __rwr=$__v ;; five_hour_reset=*) __rfr=$__v ;; esac
+  done
+  [ -n "$__rw" ] && [ -n "$__rf" ] || { echo "quota: unreadable answer: $__out" >&2; return 1; }
+  printf '%s %s %s %s %s %s\n' "$(date +%s)" "$1" "$__rw" "$__rf" "$__rwr" "$__rfr" >> "$QUOTA_READINGS"
+}
+# _quota_text VARNAME PROVIDER — "weekly 97.7% left (refresh 167h21m), 5-hour 94.3% left (refresh 4h21m), read 16:43"
+_quota_text() {
+  local __ts __w __f __wr __fr __t
+  _quota_reading __ts __w __f __wr __fr "$2" || return 1
+  __t=$(date -r "$__ts" +%H:%M 2>/dev/null || date -d "@$__ts" +%H:%M 2>/dev/null)
+  eval "$1=\"weekly ${__w%.*}% left (refresh $__wr), 5-hour ${__f%.*}% left (refresh $__fr), read $__t\""
+}
+
+cmd_quota() {
+  local text
+  _sample_quota "$PROVIDER" force || die "$PROVIDER: no quota reading (is it an Antigravity profile, and is agy signed in and past its first-run wizard?)"
+  _quota_text text "$PROVIDER"
+  echo "$PROVIDER: plan quota $text"
+}
+
 # Callers below pass names no helper declares as a local (__spent, __left, __bill):
 # _month_to_date and _latest_reading have their own __micro and __bal, and an
 # eval into a colliding name assigns the helper's local, not the caller's.
@@ -529,6 +578,11 @@ _cap_reached() {
       _requests_today __req "$2"
       if [ "$__req" -ge "$__daily" ]; then eval "$1=\"$__req of $__daily model requests today; it resets at midnight\""; return 0; fi ;;
     quota)
+      # a fresh reading at 0% is the cap too (the /usage panel, D20)
+      if _quota_reading __req __daily __spent __bill __usd_out "$2" && [ $(( $(date +%s) - __req )) -lt "$QUOTA_FRESH_S" ]; then
+        if [ "${__spent%.*}" = 0 ]; then eval "$1=\"the plan's 5-hour quota is at 0% (refresh $__usd_out)\""; return 0; fi
+        if [ "${__daily%.*}" = 0 ]; then eval "$1=\"the plan's weekly quota is at 0% (refresh $__bill)\""; return 0; fi
+      fi
       _quota_spent_at __left "$2" || return 1
       if [ $(( $(date +%s) - __left )) -lt "$QUOTA_HOLD_S" ]; then
         __req=$(date -r "$__left" +%H:%M 2>/dev/null || date -d "@$__left" +%H:%M 2>/dev/null)
@@ -545,7 +599,7 @@ _cap_reached() {
 
 # _provider_line VARNAME PROVIDER — one line per kind of cost.
 _provider_line() {
-  local __prof="$SELF_DIR/providers/$2.conf" __billing=tokens __spent __bill __usd_out __usd_bill __daily __req __left __why __out
+  local __prof="$SELF_DIR/providers/$2.conf" __billing=tokens __spent __bill __usd_out __usd_bill __daily __req __left __why __out __qt
   _conf __billing "$__prof" billing || __billing=tokens
   case $__billing in
     tokens)
@@ -559,7 +613,12 @@ _provider_line() {
       __out="$2: $__req of $__daily model requests today (the plan's allowance, not money)" ;;
     quota)
       _requests_today __req "$2"
-      __out="$2: $__req run(s) today on the plan's quota (refreshed every 5 h up to a weekly cap; not readable headless, the CLI refuses when it is spent)" ;;
+      _sample_quota "$2" 2>/dev/null
+      if _quota_text __qt "$2"; then
+        __out="$2: $__req run(s) today · plan quota $__qt"
+      else
+        __out="$2: $__req run(s) today on the plan's quota (no reading yet: sidecar.sh quota --provider $2)"
+      fi ;;
     *)
       if _latest_reading __left "$2"; then
         __out="$2: $((__left / 1000000)) min of session time left at the last reading"
@@ -837,6 +896,39 @@ $worker_rules"
   echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
 }
 
+# _launch_agy PIDVAR WORKER WORKTREE MODEL TIMEOUT PROMPT [CONVERSATION] — one
+# headless run of the CLI in the worktree, detached; the pid of the wrapper
+# subshell lands in PIDVAR. With a conversation id it is the next turn of that
+# conversation (D20), otherwise a new one.
+# --dangerously-skip-permissions: nobody is there to approve tools (the CLI
+# auto-denies what it cannot ask about). --print-timeout: the CLI's default is
+# 5 minutes, which no coding task fits. The exit code lands in .rc for status;
+# stdout is the one JSON envelope the CLI prints when done.
+# The wrapper's own descriptors are detached too: a background subshell that
+# inherits the caller's stdout keeps a `$(sidecar.sh start …)` waiting until
+# the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
+# launching from a tool call would have hung with it.
+_launch_agy() {
+  # __hooks, not __guard: _make_guard has a local of that name, and an eval into
+  # a colliding name assigns the helper's local instead of ours.
+  local __v=$1 __worker=$2 __wt=$3 __model=$4 __timeout=$5 __prompt=$6 __cid=${7:-} __hooks
+  [ -d "$RUN/$__worker.hooks" ] && __hooks="$RUN/$__worker.hooks" || _make_guard __hooks "$__worker"
+  local -a __args=()
+  [ "$__model" != auto ] && __args+=(--model "$__model")
+  [ -n "$__cid" ] && __args+=(--conversation "$__cid")
+  (
+    # an API key in the environment would make the CLI bill it instead of the plan
+    unset GEMINI_API_KEY GOOGLE_API_KEY
+    cd "$__wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$__hooks" \
+      agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" ${__args[@]+"${__args[@]}"} \
+        < /dev/null > "$RUN/$__worker.out" 2> "$RUN/$__worker.err"
+    echo $? > "$RUN/$__worker.rc"
+  ) < /dev/null > /dev/null 2>&1 &
+  local __pid=$!
+  disown "$__pid" 2>/dev/null
+  eval "$__v=\$__pid"
+}
+
 # The Antigravity CLI as the worker (D18, superseding D16's Gemini CLI: Google
 # stopped serving personal accounts there on 2026-06-18). `agy` runs the task
 # headless in a worktree of its own and exits; there is no session to attach
@@ -876,8 +968,6 @@ _start_agy() {
   wt="$repo/.claude/worktrees/$worker"
   mkdir -p "$repo/.claude/worktrees" || die "cannot create $repo/.claude/worktrees"
   git worktree add -q -b "$worker" "$wt" >/dev/null 2>&1 || die "git worktree add failed for $wt (is the branch name $worker free?)"
-  local guard
-  _make_guard guard "$worker"
   # The brief rides at the top of the prompt. A standing-instruction file
   # (GEMINI.md / AGENTS.md) written into the worktree would show up in the diff
   # and clobber a repository's own; the prompt does not.
@@ -895,26 +985,8 @@ $worker_rules"
 
 TASK:
 $TASK"
-  local -a margs=()
-  [ "$model" != auto ] && margs=(--model "$model")
-  # --dangerously-skip-permissions: nobody is there to approve tools (the
-  # CLI auto-denies what it cannot ask about). --print-timeout: the CLI's
-  # default is 5 minutes, which no coding task fits. The exit code lands in
-  # .rc for status; stdout is the one JSON envelope the CLI prints when done.
-  # The wrapper's own descriptors are detached too: a background subshell that
-  # inherits the caller's stdout keeps a `$(sidecar.sh start …)` waiting until
-  # the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
-  # launching from a tool call would have hung with it.
-  (
-    # an API key in the environment would make the CLI bill it instead of the plan
-    unset GEMINI_API_KEY GOOGLE_API_KEY
-    cd "$wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
-      agy -p "$prompt" --output-format json --dangerously-skip-permissions --print-timeout "$timeout" ${margs[@]+"${margs[@]}"} \
-        < /dev/null > "$RUN/$worker.out" 2> "$RUN/$worker.err"
-    echo $? > "$RUN/$worker.rc"
-  ) < /dev/null > /dev/null 2>&1 &
-  local pid=$!
-  disown "$pid" 2>/dev/null
+  local pid
+  _launch_agy pid "$worker" "$wt" "$model" "$timeout" "$prompt"
   {
     echo "worker=$worker"
     echo "provider=$PROVIDER"
@@ -923,12 +995,56 @@ $TASK"
     echo "pid=$pid"
     echo "worktree=$wt"
     echo "repo=$repo"
+    echo "turns=1"
     echo "started=$(date +%s)"
   } > "$RUN/$worker.env.tmp" && mv "$RUN/$worker.env.tmp" "$RUN/$worker.env"   # whole or absent for status/collect/stop
   echo "worker $worker · $PROVIDER/$model (Antigravity CLI, headless) · $wt"
-  echo "  budget:  the plan's quota (refreshed every 5 h up to a weekly cap, not readable headless); a run that hits it marks $PROVIDER spent for 5 h"
+  echo "  budget:  the plan's 5-hour and weekly quota (\"$SELF_DIR/sidecar.sh\" quota --provider $PROVIDER reads them); a run that hits it marks $PROVIDER spent for 5 h"
   echo "  watch:   tail -f \"$RUN/$worker.err\"   (the JSON result arrives in $RUN/$worker.out when it exits)"
-  echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
+  echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker   (then: say --worker $worker --task \"...\" continues the conversation)"
+}
+
+# The next turn of an Antigravity worker's conversation (D20): the CLI keeps
+# the whole exchange under its conversation id, so a follow-up is one more
+# headless run in the same worktree with --conversation. Measured 2026-09-14:
+# the earlier turns are read from cache when the next turn comes within a
+# couple of minutes (12k of 21k input tokens cached at 2 min; nothing at 10).
+cmd_say() {
+  [ -n "$WORKER" ] || die "say needs --worker NAME."
+  [ -n "$TASK" ] || die "say needs --task TEXT: the next turn."
+  local f="$RUN/$WORKER.env"
+  [ -f "$f" ] || die "no worker called $WORKER. Try: sidecar.sh status"
+  local provider='' model='' harness=claude worktree='' pid='' turns=1 line
+  while IFS= read -r line || [ -n "$line" ]; do
+    case ${line%%=*} in
+      provider) provider=${line#*=} ;; model) model=${line#*=} ;; harness) harness=${line#*=} ;;
+      worktree) worktree=${line#*=} ;; pid) pid=${line#*=} ;; turns) turns=${line#*=} ;;
+    esac
+  done < "$f"
+  [ "$harness" = antigravity-cli ] || die "say is for Antigravity CLI workers; a Claude Code worker is reached with claude attach."
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then die "worker $WORKER is still on its current turn (pid $pid). Collect it when it exits, then say the next."; fi
+  local why
+  _cap_reached why "$provider" && die "$provider has reached its cap: $why. Nothing launched."
+  local cid=''
+  _agy_field cid "$RUN/$WORKER.out" conversation_id || cid=''
+  [ -n "$cid" ] || die "the last turn of $WORKER left no envelope with a conversation id ($RUN/$WORKER.out), so there is nothing to continue. Start a new worker."
+  [ -d "$worktree" ] || die "the worktree $worktree is gone."
+  local timeout=''
+  _conf timeout "$SELF_DIR/providers/$provider.conf" print_timeout || timeout=2h
+  # the previous turn's envelope is kept for the record; the new run replaces .out/.err/.rc
+  cat "$RUN/$WORKER.out" >> "$RUN/$WORKER.turns"
+  rm -f "$RUN/$WORKER.collected" "$RUN/$WORKER.rc"
+  local npid
+  _launch_agy npid "$WORKER" "$worktree" "$model" "$timeout" "$TASK" "$cid"
+  turns=$((turns + 1))
+  {
+    while IFS= read -r line || [ -n "$line" ]; do
+      case ${line%%=*} in pid|turns|conversation|started) ;; *) printf '%s\n' "$line" ;; esac
+    done < "$f"
+    echo "pid=$npid"; echo "turns=$turns"; echo "conversation=$cid"; echo "started=$(date +%s)"
+  } > "$f.tmp" && mv "$f.tmp" "$f"
+  echo "turn $turns of $WORKER · $provider/$model · conversation ${cid%%-*}… · $worktree"
+  echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $WORKER   (then the next say within ~2 min keeps the cache warm)"
 }
 
 cmd_status() {
@@ -961,12 +1077,12 @@ cmd_collect() {
   [ -n "$WORKER" ] || die "collect needs --worker NAME."
   local f="$RUN/$WORKER.env"
   [ -f "$f" ] || die "no worker called $WORKER. Try: sidecar.sh status"
-  local provider='' model='' session='' repo='' harness=claude worktree='' pid='' line
+  local provider='' model='' session='' repo='' harness=claude worktree='' pid='' turns=1 line
   while IFS= read -r line || [ -n "$line" ]; do
     case ${line%%=*} in
       provider) provider=${line#*=} ;; model) model=${line#*=} ;;
       session) session=${line#*=} ;; repo) repo=${line#*=} ;;
-      harness) harness=${line#*=} ;; worktree) worktree=${line#*=} ;; pid) pid=${line#*=} ;;
+      harness) harness=${line#*=} ;; worktree) worktree=${line#*=} ;; pid) pid=${line#*=} ;; turns) turns=${line#*=} ;;
     esac
   done < "$f"
 
@@ -995,7 +1111,7 @@ cmd_collect() {
 
   echo
   if [ "$harness" = antigravity-cli ]; then
-    _collect_agy "$provider" "$model" "$pid"
+    _collect_agy "$provider" "$model" "$pid" "$turns"
     return
   fi
   # And one after, which is what makes a difference computable at all.
@@ -1077,7 +1193,7 @@ cmd_collect() {
 # CLI printed on exit. Nothing is priced in money — the plan's quota is the
 # unit, and a run that ends in a quota error marks the provider spent (QUOTA).
 _collect_agy() {
-  local provider=$1 model=$2 pid=$3 out="$RUN/$WORKER.out" turns inn outt ca th st='' err='' resp='' today
+  local provider=$1 model=$2 pid=$3 turn=${4:-1} out="$RUN/$WORKER.out" turns inn outt ca th st='' err='' resp='' today
   echo "== what it cost =="
   if kill -0 "$pid" 2>/dev/null; then
     echo "still running (pid $pid); the CLI prints its result and usage when it exits."
@@ -1096,7 +1212,7 @@ _collect_agy() {
   _agy_seconds secs "$out" || secs=0
   # output tokens over the whole run (tool time included): what the rate feels like from outside
   [ "$secs" -gt 0 ] && rate=", ~$(( (outt + th) / secs )) output tok/s over the run"
-  echo "$provider/$model · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
+  echo "$provider/$model · conversation turn $turn · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
   [ "$no_usage" = 0 ] && echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
   if [ "$st" != SUCCESS ]; then
     _agy_field err "$out" error || err=''
@@ -1123,6 +1239,7 @@ _collect_agy() {
   fi
   _requests_today today "$provider"
   echo "today: $today run(s) on $provider"
+  [ "$st" = SUCCESS ] && echo "continue: \"$SELF_DIR/sidecar.sh\" say --worker $WORKER --task \"...\"   (within ~2 min the earlier turns are read from cache)"
   return 0
 }
 
@@ -1140,7 +1257,7 @@ cmd_stop() {
     kill "$pid" 2>/dev/null
     echo "killed pid $pid"
   fi
-  rm -f "$RUN/$WORKER.out" "$RUN/$WORKER.err" "$RUN/$WORKER.rc"
+  rm -f "$RUN/$WORKER.out" "$RUN/$WORKER.err" "$RUN/$WORKER.rc" "$RUN/$WORKER.turns"
   # The guard directory holds only our pre-push and symlinks to the repo's own
   # hooks, so removing it takes nothing of the user's with it.
   rm -f "$RUN/$WORKER.hooks"/* 2>/dev/null
@@ -1230,6 +1347,8 @@ fi
 
 case $CMD in
   start)   cmd_start ;;
+  say)     cmd_say ;;
+  quota)   cmd_quota ;;
   status)  cmd_status ;;
   collect) cmd_collect ;;
   stop)    cmd_stop ;;
@@ -1239,10 +1358,12 @@ case $CMD in
   off)     cmd_off ;;
   *) cat >&2 <<USAGE
 sidecar.sh start  --task TEXT [--provider NAME] [--model SLUG] [--permission-mode MODE]
+sidecar.sh say    --worker NAME --task TEXT   the next turn of an Antigravity worker's conversation
 sidecar.sh status
 sidecar.sh collect --worker NAME
 sidecar.sh stop    --worker NAME
 sidecar.sh spend
+sidecar.sh quota   [--provider NAME]   read an Antigravity profile's plan quota (the CLI's /usage panel)
 sidecar.sh rules   [--provider NAME]   the provider's rules of engagement for the dispatching session
 sidecar.sh on      [--provider NAME]   what /sidecar-on runs: record the provider and switch the mode on
 sidecar.sh off

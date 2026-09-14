@@ -38,7 +38,7 @@ rmdir "$CLAUDE_DIR/budget-run" 2>/dev/null || true
 rm -f "$CLAUDE_DIR/sidecar-mode" "$CLAUDE_DIR/statusline-extra"
 rm -f "$CLAUDE_DIR/commands/sidecar-on.md" "$CLAUDE_DIR/commands/sidecar-off.md"
 rm -f "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/prices.conf" \
-      "$CLAUDE_DIR/drive-sidecar/guard.sh"
+      "$CLAUDE_DIR/drive-sidecar/guard.sh" "$CLAUDE_DIR/drive-sidecar/antigravity-quota.py"
 rm -f "$CLAUDE_DIR/drive-sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"*.rules.md
 rm -f "$CLAUDE_DIR/hooks/sidecar-mode.sh"
 rmdir "$CLAUDE_DIR/drive-sidecar/providers" "$CLAUDE_DIR/drive-sidecar" 2>/dev/null || true

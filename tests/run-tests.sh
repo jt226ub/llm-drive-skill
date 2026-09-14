@@ -1583,6 +1583,21 @@ group "Sidecar — the Antigravity CLI as the worker (headless, in a worktree)"
 # instead, for the stop test; AGY_STUB_QUOTA makes it fail with a quota error.
 cat > "$SCSTUB/agy" <<'STUBEOF'
 #!/bin/bash
+if [ $# -eq 0 ]; then
+  # interactive mode, as antigravity-quota.py drives it: a trust question, the prompt, /usage, /exit
+  case ${AGY_STUB_USAGE:-} in *"Terms of Service"*) printf '%s\n' "$AGY_STUB_USAGE"; sleep 5; exit 0 ;; esac   # the first-run wizard instead
+  printf 'Accessing workspace: %s\nDo you trust the contents of this project?\n> Yes, I trust this folder\n' "$PWD"
+  IFS= read -r line
+  printf '  jt226ub@gmail.com (Google AI Pro)\n>\n? for shortcuts\n'
+  while IFS= read -r line; do
+    line=${line%$'\r'}
+    case $line in
+      /usage) printf '%s\n' "$AGY_STUB_USAGE" ;;
+      /exit) exit 0 ;;
+    esac
+  done
+  exit 0
+fi
 printf '%s\n' "$@" > "$AGY_ARGV"
 env > "$AGY_ENV"
 pwd > "$AGY_CWD"
@@ -1737,6 +1752,70 @@ GW7=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | he
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW7.rc" ] && break; sleep 0.5; done
 case "$(gsp collect --worker "$GW7")" in *"worktree: $SPREPO_P/.claude/worktrees/$GW7"*"stub work"*) ok "collect lists a worktree whose path contains a space (porcelain listing)" ;; *) bad "collect lists a worktree whose path contains a space" "start: $OUT | $(gsp collect --worker "$GW7" | head -4)" ;; esac
 gsp stop --worker "$GW7" >/dev/null
+
+# D20: the next turn of a conversation, and the plan quota from the CLI's /usage panel.
+rm -f "$SCHOME/.claude/sidecar-quota" "$SCHOME/.claude/sidecar-quota-readings" "$SCHOME/.claude/sidecar-requests" "$AGY_ARGV"
+OUT="$(gsc start --provider antigravity-cli --task 'first turn: read the files')"
+GWS=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GWS.rc" ] && break; sleep 0.5; done
+case "$(gsc collect --worker "$GWS")" in *"conversation turn 1"*"continue: "*"say --worker $GWS --task"*) ok "collect names the turn and how to continue the conversation" ;; *) bad "collect names the turn and how to continue" "$(gsc collect --worker "$GWS" | tail -4)" ;; esac
+rm -f "$AGY_ARGV"
+OUT2="$(gsc say --worker "$GWS" --task 'second turn: now add the test')"
+case $OUT2 in *"turn 2 of $GWS"*"conversation c1"*) ok "say launches the next turn and names it" ;; *) bad "say launches the next turn and names it" "$OUT2" ;; esac
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GWS.rc" ] && break; sleep 0.5; done
+GARGV2=$(tr '\n' ' ' < "$AGY_ARGV" 2>/dev/null)
+case $GARGV2 in *"-p second turn: now add the test "*"--conversation c1"*) ok "the next turn carries only the new text and the conversation id" ;; *) bad "the next turn carries only the new text and the conversation id" "$GARGV2" ;; esac
+case $GARGV2 in *"Rules of engagement"*) bad "no brief is repeated on a later turn" ;; *) ok "no brief is repeated on a later turn (the conversation holds it)" ;; esac
+case "$(cat "$SCHOME/.claude/sidecar-run/$GWS.env")" in *"turns=2"*"conversation=c1"*) ok "the run record counts the turn and keeps the conversation id" ;; *) bad "the run record counts the turn" "$(cat "$SCHOME/.claude/sidecar-run/$GWS.env")" ;; esac
+if [ "$(grep -c '"conversation_id"' "$SCHOME/.claude/sidecar-run/$GWS.turns")" = 1 ]; then ok "the previous turn's envelope is kept in .turns"; else bad "the previous turn's envelope is kept in .turns"; fi
+case "$(gsc collect --worker "$GWS")" in *"conversation turn 2"*"today: 2 run(s)"*) ok "collect counts the second turn as a run" ;; *) bad "collect counts the second turn as a run" "$(gsc collect --worker "$GWS" | grep -E 'turn|today')" ;; esac
+rm -f "$SCHOME/.claude/sidecar-run/$GWS.out"; : > "$SCHOME/.claude/sidecar-run/$GWS.out"
+case "$(gsc say --worker "$GWS" --task x)" in *"left no envelope with a conversation id"*) ok "say refuses when the last turn left no envelope" ;; *) bad "say refuses when the last turn left no envelope" "$(gsc say --worker "$GWS" --task x)" ;; esac
+gsc stop --worker "$GWS" >/dev/null
+if [ ! -f "$SCHOME/.claude/sidecar-run/$GWS.turns" ]; then ok "stop removes the turns record"; else bad "stop removes the turns record"; fi
+export AGY_STUB_SLEEP=60
+OUT3="$(gsc start --provider antigravity-cli --task 'hang')"; unset AGY_STUB_SLEEP
+GWH=$(printf '%s\n' "$OUT3" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+case "$(gsc say --worker "$GWH" --task x)" in *"still on its current turn"*) ok "say refuses while a turn is running" ;; *) bad "say refuses while a turn is running" "$(gsc say --worker "$GWH" --task x)" ;; esac
+gsc stop --worker "$GWH" >/dev/null
+printf 'worker=w9\nprovider=deepseek\nmodel=m\nsession=s\nrepo=%s\n' "$SCHOME/repo" > "$SCHOME/.claude/sidecar-run/w9.env"
+case "$(sc say --worker w9 --task x)" in *"is for Antigravity CLI workers"*) ok "say refuses a Claude Code worker" ;; *) bad "say refuses a Claude Code worker" "$(sc say --worker w9 --task x)" ;; esac
+rm -f "$SCHOME/.claude/sidecar-run/w9.env"
+
+# quota: the parser on a saved panel, the reader through the stub's interactive mode, spend, and the 0% cap
+cat > "$WORK/agy-usage.txt" <<'PANEL'
+└ Models & Quota
+  Account: jt226ub@gmail.com
+GEMINI MODELS
+  Models within this group: Gemini Flash, Gemini Pro
+  Weekly Limit Remaining
+  [█████████████████████████████████████████████████░] 97.71%
+  98% remaining · Refreshes in 167h 21m
+  Five Hour Limit Remaining
+  [███████████████████████████████████████████████░░░] 94.34%
+  94% remaining · Refreshes in 4h 21m
+CLAUDE AND GPT MODELS
+  Models within this group: Claude Opus, Claude Sonnet, GPT-OSS
+  Weekly Limit Remaining
+  [██████████████████████████████████████████████████] 100.00%
+  Quota available
+PANEL
+assert_eq "weekly=97.71 weekly_reset=167h21m five_hour=94.34 five_hour_reset=4h21m" "$(python3 "$ROOT/modules/sidecar/antigravity-quota.py" --parse "$WORK/agy-usage.txt")" "the quota parser reads the Gemini group's two bars from a saved /usage panel"
+export AGY_STUB_USAGE="$(cat "$WORK/agy-usage.txt")"
+case "$(gsc quota --provider antigravity-cli)" in "antigravity-cli: plan quota weekly 97% left (refresh 167h21m), 5-hour 94% left (refresh 4h21m), read "??:??) ok "quota drives the CLI's /usage under a pty and reports the reading" ;; *) bad "quota drives the CLI's /usage under a pty and reports the reading" "$(gsc quota --provider antigravity-cli)" ;; esac
+NREAD=$(wc -l < "$SCHOME/.claude/sidecar-quota-readings" | tr -d ' ')
+printf '%s antigravity-cli 1\n' "$(date +%Y-%m-%d)" > "$SCHOME/.claude/sidecar-requests"
+case "$(gsc spend)" in *"antigravity-cli: 1 run(s) today · plan quota weekly 97% left"*) ok "spend shows the plan quota beside the day's runs" ;; *) bad "spend shows the plan quota beside the day's runs" "$(gsc spend)" ;; esac
+assert_eq "$NREAD" "$(wc -l < "$SCHOME/.claude/sidecar-quota-readings" | tr -d ' ')" "spend reuses a fresh reading instead of driving the CLI again"
+printf '%s antigravity-cli 42.0 0.00 100h 3h10m\n' "$(date +%s)" >> "$SCHOME/.claude/sidecar-quota-readings"
+case "$(gsc spend)" in *"CAP REACHED (the plan's 5-hour quota is at 0% (refresh 3h10m)); start refuses"*) ok "a fresh reading at 0% is the cap" ;; *) bad "a fresh reading at 0% is the cap" "$(gsc spend)" ;; esac
+case "$(gsc start --provider antigravity-cli --task x)" in *"5-hour quota is at 0%"*) ok "and start refuses on it" ;; *) bad "and start refuses on it" "$(gsc start --provider antigravity-cli --task x)" ;; esac
+printf '%s antigravity-cli 42.0 55.0 100h 3h10m\n' "$(( $(date +%s) - 700 ))" > "$SCHOME/.claude/sidecar-quota-readings"
+export AGY_STUB_USAGE="Terms of Service & Data Use
+  > [x] Yes, I agree"
+case "$(gsc quota --provider antigravity-cli 2>&1)" in *"first-run wizard"*) ok "the reader stops at the CLI's first-run wizard instead of answering it" ;; *) bad "the reader stops at the CLI's first-run wizard instead of answering it" "$(gsc quota --provider antigravity-cli 2>&1)" ;; esac
+unset AGY_STUB_USAGE
+rm -f "$SCHOME/.claude/sidecar-quota-readings" "$SCHOME/.claude/sidecar-requests"
 rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests" "$SCHOME/.claude/sidecar-quota"
 
 # ---------------------------------------------------------------------------
