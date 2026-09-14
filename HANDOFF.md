@@ -37,6 +37,21 @@ pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live s
 argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
 Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
 
+## Candidate: Gemini CLI as a second worker shape — assessed 2026-09-14, not built
+
+The user's free Google AI Pro plan gives 1,500 Gemini CLI model requests/day (geminicli.com quota page)
+but funds no API key, and using the CLI's OAuth from any other software is a stated terms violation
+with mass suspensions in Feb–Mar 2026. The only legitimate route is the official CLI in headless mode
+(`gemini -p "..." --output-format json --approval-mode yolo`, exit codes 0/1/42/53, JSON `response` +
+`stats`). What the sidecar would need for a `harness=gemini-cli` profile: create the worktree and branch
+itself (Claude Code did that for `--bg`; Gemini CLI does not), run the CLI with `nohup` and record the
+pid + output file in the run record instead of a session id, put the brief and the Worker rules in a
+`GEMINI.md` in the worktree (or `GEMINI_SYSTEM_MD`), keep the pre-push guard (it is `GIT_CONFIG_*`, harness-
+agnostic), `status` from the pid, `collect` from the diff + the JSON `stats` (quota is requests/day, so
+`billing=requests` with a daily counter, no money), `stop` = kill the pid. No peer messaging. Estimate:
+150–250 lines of sidecar.sh plus a stub `gemini` for tests, one session. Install: `npm i -g
+@google/gemini-cli`, one interactive `gemini` login by the user. Decision pending with the user.
+
 ## What this session did
 
 **Budget module: built, installed, live.** Sensor, gate, park and resume, with
