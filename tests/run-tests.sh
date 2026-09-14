@@ -1494,12 +1494,15 @@ assert_eq 1 "$(rules_fn '_rules_section r "'"$WORK/absent.md"'" Worker; echo $?'
 printf '## Orchestrator\n\n\n## Worker\nx\n' > "$WORK/empty.rules.md"
 assert_eq 1 "$(rules_fn '_rules_section r "'"$WORK/empty.rules.md"'" Orchestrator; echo $?')" "an empty section counts as absent"
 
-# The shipped file: both sections, and the per-prompt one short enough to ride every turn.
+# Every shipped rules file: both sections, and the per-prompt one short enough to ride every turn.
 SHIPPED="$ROOT/modules/sidecar/providers/deepseek.rules.md"
-ORCH_LINES=$(rules_fn '_rules_section r "'"$SHIPPED"'" Orchestrator; printf "%s\n" "$r"' | wc -l | tr -d ' ')
-if [ "$ORCH_LINES" -ge 1 ] && [ "$ORCH_LINES" -le 15 ]; then ok "the shipped DeepSeek Orchestrator section is 1–15 lines ($ORCH_LINES)"
-else bad "the shipped DeepSeek Orchestrator section is 1–15 lines" "got $ORCH_LINES"; fi
-if rules_fn '_rules_section r "'"$SHIPPED"'" Worker' >/dev/null; then ok "and it has a Worker section"; else bad "and it has a Worker section"; fi
+for rf in "$ROOT"/modules/sidecar/providers/*.rules.md; do
+  rname=${rf##*/}
+  ORCH_LINES=$(rules_fn '_rules_section r "'"$rf"'" Orchestrator; printf "%s\n" "$r"' | wc -l | tr -d ' ')
+  if [ "$ORCH_LINES" -ge 1 ] && [ "$ORCH_LINES" -le 15 ]; then ok "$rname: Orchestrator section is 1–15 lines ($ORCH_LINES)"
+  else bad "$rname: Orchestrator section is 1–15 lines" "got $ORCH_LINES"; fi
+  if rules_fn '_rules_section r "'"$rf"'" Worker' >/dev/null; then ok "$rname: has a Worker section"; else bad "$rname: has a Worker section"; fi
+done
 
 # `rules` prints the Orchestrator section; a provider without a profile is refused.
 case "$(sc rules)" in
@@ -1562,6 +1565,84 @@ case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
   "SIDECAR MODE IS ON (provider deepseek;"*"One worker at a time is enforced"*) ok "an empty flag means deepseek, the shipped rules" ;;
   *) bad "an empty flag means deepseek" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" ;;
 esac
+
+# ---------------------------------------------------------------------------
+group "Sidecar — the Gemini CLI as the worker (headless, in a worktree)"
+# ---------------------------------------------------------------------------
+# A stub `gemini` that records argv and env, does a commit in its cwd (the
+# worktree), prints the JSON shape the real CLI prints for -o json, and exits 0.
+# GEMINI_STUB_SLEEP makes it hang instead, for the stop test.
+cat > "$SCSTUB/gemini" <<'STUBEOF'
+#!/bin/bash
+printf '%s\n' "$@" > "$GEMINI_ARGV"
+env > "$GEMINI_ENV"
+pwd > "$GEMINI_CWD"
+if [ -n "${GEMINI_STUB_SLEEP:-}" ]; then sleep "$GEMINI_STUB_SLEEP"; exit 0; fi
+echo "stub work" > done.txt
+git add done.txt && git -c user.email=s@s -c user.name=stub commit -q -m "stub work"
+printf '%s\n' '{"session_id":"abc","response":"Added done.txt and committed.\nTests: ok","stats":{"models":{"gemini-2.5-pro":{"api":{"totalRequests":7,"totalErrors":0,"totalLatencyMs":900,"errorsByType":{}},"tokens":{"input":100,"prompt":120,"candidates":30,"total":150,"cached":20,"thoughts":5,"tool":0},"roles":{"main":{"totalRequests":7,"totalErrors":0,"totalLatencyMs":900,"tokens":{"input":100,"prompt":120,"candidates":30,"total":150,"cached":20,"thoughts":5,"tool":0}}}},"gemini-2.5-flash":{"api":{"totalRequests":3,"totalErrors":0,"totalLatencyMs":100,"errorsByType":{}},"tokens":{"input":10,"prompt":12,"candidates":4,"total":16,"cached":2,"thoughts":0,"tool":0},"roles":{}}},"tools":{"totalCalls":4,"totalSuccess":4,"totalFail":0,"totalDurationMs":50,"totalDecisions":{},"byName":{}},"files":{"totalLinesAdded":1,"totalLinesRemoved":0}}}'
+exit 0
+STUBEOF
+chmod +x "$SCSTUB/gemini"
+export GEMINI_ARGV="$WORK/g-argv.txt" GEMINI_ENV="$WORK/g-env.txt" GEMINI_CWD="$WORK/g-cwd.txt"
+GREPO="$SCHOME/grepo"; mkdir -p "$GREPO"; git -C "$GREPO" init -q; git -C "$GREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+# git answers with the physical path (/private/var on macOS), so compare against that
+GREPO_P=$(cd "$GREPO" && pwd -P)
+gsc() { ( cd "$GREPO" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$SC" "$@" ) 2>&1; }
+rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.gemini/oauth_creds.json"; touch "$SCHOME/.claude/sidecar-mode"
+
+case "$(gsc start --provider gemini-cli --task x)" in
+  *"not signed in"*) ok "start refuses when there is no Gemini CLI login (oauth_creds.json)" ;;
+  *) bad "start refuses when there is no Gemini CLI login" "$(gsc start --provider gemini-cli --task x)" ;;
+esac
+mkdir -p "$SCHOME/.gemini"; printf '{"access_token":"fake"}\n' > "$SCHOME/.gemini/oauth_creds.json"
+rm -f "$GEMINI_ARGV"
+OUT="$(gsc start --provider gemini-cli --task 'add done.txt and commit')"
+GW=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+case $OUT in *"Gemini CLI, headless"*) ok "start launches the Gemini CLI worker shape" ;; *) bad "start launches the Gemini CLI worker shape" "$OUT" ;; esac
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW.rc" ] && break; sleep 0.5; done
+if [ -d "$GREPO/.claude/worktrees/$GW" ] && git -C "$GREPO" branch --list "$GW" | grep -q "$GW"; then ok "a worktree on a branch named after the worker was created under .claude/worktrees"
+else bad "a worktree on a branch named after the worker was created" "$(git -C "$GREPO" worktree list)"; fi
+assert_eq "$GREPO_P/.claude/worktrees/$GW" "$(cat "$GEMINI_CWD" 2>/dev/null)" "the CLI ran inside that worktree"
+GARGV=$(tr '\n' ' ' < "$GEMINI_ARGV" 2>/dev/null)
+case $GARGV in *"-p "*"commit it on this branch and stop there"*"Rules of engagement for auto on gemini-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
+  ok "the prompt carries the brief, the provider's Worker rules and the task, in that order" ;;
+  *) bad "the prompt carries the brief, the Worker rules and the task" "$GARGV" ;; esac
+case $GARGV in *"-o json "*"--approval-mode yolo "*"--skip-trust"*) ok "headless flags: -o json, --approval-mode yolo, --skip-trust" ;; *) bad "headless flags" "$GARGV" ;; esac
+case $GARGV in *" -m "*) bad "model=auto passes no -m" "$GARGV" ;; *) ok "model=auto passes no -m (the CLI picks under a subscription login)" ;; esac
+if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$GEMINI_ENV" 2>/dev/null; then ok "the push guard reaches the CLI's git through GIT_CONFIG_*"; else bad "the push guard reaches the CLI's git"; fi
+GUARD=$(sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$GEMINI_ENV")
+if [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then ok "and the guard's pre-push refuses"; else bad "and the guard's pre-push refuses" "$GUARD"; fi
+case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=gemini-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
+case "$(gsc status)" in *"exited(0)  $GW  gemini-cli/auto"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
+COLL="$(gsc collect --worker "$GW")"
+case $COLL in *"stub work"*"10 model requests"*"in 132 (+22 cached), out 34"*"Added done.txt"*"today: 10 of 1500 requests on gemini-cli"*)
+  ok "collect shows the commit, sums requests and tokens across models (roles not double-counted), the response, and today's allowance" ;;
+  *) bad "collect shows the commit, requests, tokens and the response" "$COLL" ;; esac
+COLL2="$(gsc collect --worker "$GW")"
+case $COLL2 in *"already collected once"*"today: 10 of 1500"*) ok "a second collect does not count the requests again" ;; *) bad "a second collect does not count again" "$COLL2" ;; esac
+case "$(gsc spend)" in *"gemini-cli: 10 of 1500 model requests today"*) ok "spend shows the day's requests for a requests-billed provider" ;; *) bad "spend shows the day's requests" "$(gsc spend)" ;; esac
+gsc stop --worker "$GW" >/dev/null
+if [ ! -f "$SCHOME/.claude/sidecar-run/$GW.env" ] && [ ! -f "$SCHOME/.claude/sidecar-run/$GW.out" ]; then ok "stop removes the record and the CLI's output files"; else bad "stop removes the record"; fi
+if [ -d "$GREPO/.claude/worktrees/$GW" ]; then ok "and leaves the worktree with the work in it"; else bad "and leaves the worktree"; fi
+
+# A worker that is still running: status says live, stop kills it.
+# exported, not prefixed: a prefix assignment on a shell function does not reach the processes it spawns
+export GEMINI_STUB_SLEEP=60
+T_START=$(date +%s)
+OUT="$(gsc start --provider gemini-cli --task 'hang')"
+unset GEMINI_STUB_SLEEP
+if [ $(( $(date +%s) - T_START )) -lt 5 ]; then ok "start returns at once while the worker runs on (descriptors detached)"
+else bad "start returns at once while the worker runs on" "took $(( $(date +%s) - T_START )) s"; fi
+GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+sleep 0.5
+case "$(gsc status)" in *"live  $GW2  gemini-cli/auto"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep GEMINI_STUB "$GEMINI_ENV" 2>/dev/null || echo 'no GEMINI_STUB var') | argv: $(tr '\n' ' ' < "$GEMINI_ARGV" | cut -c1-80)" ;; esac
+case "$(gsc collect --worker "$GW2")" in *"still running (pid"*) ok "collect on a running worker says so and prices nothing" ;; *) bad "collect on a running worker says so" ;; esac
+GPID=$(sed -n 's/^pid=//p' "$SCHOME/.claude/sidecar-run/$GW2.env")
+gsc stop --worker "$GW2" >/dev/null; sleep 0.5
+if ! kill -0 "$GPID" 2>/dev/null; then ok "stop kills the running CLI worker"; else bad "stop kills the running CLI worker" "pid $GPID alive"; kill "$GPID" 2>/dev/null; fi
+case "$(gsc status)" in *"No workers."*) ok "and status is empty again" ;; *) bad "and status is empty again" "$(gsc status)" ;; esac
+rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests"
 
 # ---------------------------------------------------------------------------
 group "Sidecar — the status line segment the budget sensor prints"

@@ -88,6 +88,57 @@ _rules_section() {
   eval "$1=\$__body"
 }
 
+# _gemini_stats REQ_VAR PROMPT_VAR OUT_VAR CACHED_VAR FILE — sums from the JSON
+# `gemini -o json` prints: `stats.models.<model>.api.totalRequests` and the
+# model's `tokens`. Roles nest inside each model with their own totalRequests
+# (a breakdown of the same calls), so only the first counts after each `"api":{`
+# are taken — anything else double-counts. No JSON runtime is a dependency here.
+_gemini_stats() {
+  local __f=$5 __txt __chunk __n __req=0 __pr=0 __out=0 __ca=0 __first=1
+  [ -f "$__f" ] || return 1
+  __txt=$(tr -d ' \n\r\t' < "$__f")
+  case $__txt in *'"api":{'*) ;; *) return 1 ;; esac
+  while [ -n "$__txt" ]; do
+    __chunk=${__txt%%\"api\":\{*}
+    if [ "$__first" = 1 ]; then __first=0
+    else
+      __n=${__chunk#*\"totalRequests\":}; __n=${__n%%[!0-9]*}; __req=$((__req + ${__n:-0}))
+      __n=${__chunk#*\"prompt\":}; __n=${__n%%[!0-9]*}; __pr=$((__pr + ${__n:-0}))
+      __n=${__chunk#*\"candidates\":}; __n=${__n%%[!0-9]*}; __out=$((__out + ${__n:-0}))
+      __n=${__chunk#*\"cached\":}; __n=${__n%%[!0-9]*}; __ca=$((__ca + ${__n:-0}))
+    fi
+    [ "$__chunk" = "$__txt" ] && break
+    __txt=${__txt#*\"api\":\{}
+  done
+  eval "$1=\$__req; $2=\$__pr; $3=\$__out; $4=\$__ca"
+}
+
+# _gemini_response VARNAME FILE — the `response` string of that JSON, first
+# line-ish, for the collect summary. Escapes are left as printed.
+_gemini_response() {
+  local __f=$2 __txt
+  [ -f "$__f" ] || return 1
+  __txt=$(tr -d '\n\r' < "$__f")
+  case $__txt in *'"response":"'*) ;; *) return 1 ;; esac
+  __txt=${__txt#*\"response\":\"}
+  __txt=${__txt%%\",\"stats\"*}
+  eval "$1=\$__txt"
+}
+
+# Requests spent today on a requests-billed provider (Gemini CLI: 1,500 a day on
+# the plan). One line per collect: DATE PROVIDER N. Money is not the unit here.
+REQUESTS="$HOME/.claude/sidecar-requests"
+_requests_today() {
+  local __v=$1 __prov=$2 __today __line __sum=0
+  __today=$(date +%Y-%m-%d)
+  if [ -f "$REQUESTS" ]; then
+    while IFS= read -r __line || [ -n "$__line" ]; do
+      case $__line in "$__today $__prov "*) __sum=$((__sum + ${__line##* })) ;; esac
+    done < "$REQUESTS"
+  fi
+  eval "$__v=\$__sum"
+}
+
 # _conf VARNAME FILE KEY — read `key=value` from a profile.
 _conf() {
   local __v=$1 __file=$2 __key=$3 __line __out=''
@@ -397,11 +448,54 @@ _write_extra() {
 # Subcommands
 # ---------------------------------------------------------------------------
 
+# _make_guard VARNAME WORKER — the pre-push refusal hook directory for a worker,
+# with the repository's own hooks symlinked in beside it (core.hooksPath
+# replaces the hooks directory rather than adding to it). Reached through
+# GIT_CONFIG_* so it holds for any git process, whichever harness runs it.
+_make_guard() {
+  local __v=$1 __worker=$2 __guard="$RUN/$2.hooks" __repo_hooks __h
+  mkdir -p "$__guard" || die "cannot create $__guard"
+  # Absolute: `git rev-parse --git-path hooks` answers relative to the current
+  # directory, and a relative symlink target would resolve against the guard
+  # directory and dangle (it shipped that way once; the test did not catch it).
+  __repo_hooks=$(git rev-parse --git-path hooks 2>/dev/null)
+  case $__repo_hooks in /*) ;; ?*) __repo_hooks="$PWD/$__repo_hooks" ;; esac
+  if [ -n "$__repo_hooks" ] && [ -d "$__repo_hooks" ]; then
+    for __h in "$__repo_hooks"/*; do
+      [ -f "$__h" ] || continue
+      case ${__h##*/} in pre-push) continue ;; esac
+      ln -sf "$__h" "$__guard/${__h##*/}" 2>/dev/null
+    done
+  fi
+  printf '#!/bin/sh\necho "sidecar: push refused. This worker hands work back as a branch for review; the session that dispatched it merges." >&2\nexit 1\n' \
+    > "$__guard/pre-push" || die "cannot write the pre-push guard"
+  chmod +x "$__guard/pre-push"
+  eval "$__v=\$__guard"
+}
+
+# _no_worker_out — one worker at a time, by decision (D12).
+_no_worker_out() {
+  local __f __existing=''
+  for __f in "$RUN"/*.env; do
+    [ -f "$__f" ] || continue
+    __existing=${__f##*/}; __existing=${__existing%.env}
+    break
+  done
+  [ -z "$__existing" ] || die "worker $__existing is already out. One at a time, so that each result is reviewed before the next task starts. Collect it, then: \"$SELF_DIR/sidecar.sh\" stop --worker $__existing"
+}
+
 cmd_start() {
   [ -f "$FLAG" ] || die "sidecar mode is off. Switch it on with /sidecar-on."
   [ -n "$TASK" ] || die "start needs --task TEXT."
   local profile="$SELF_DIR/providers/$PROVIDER.conf"
   [ -f "$profile" ] || die "no profile at $profile."
+  local harness=claude
+  _conf harness "$profile" harness || harness=claude
+  case $harness in
+    claude) ;;
+    gemini-cli) _start_gemini "$profile"; return ;;
+    *) die "$profile: harness=$harness is not one this sidecar can launch (claude, gemini-cli)." ;;
+  esac
 
   local base cred_var cred_key model alias key
   _conf base      "$profile" base_url    || die "$profile has no base_url."
@@ -432,16 +526,7 @@ cmd_start() {
   # shadowed its own output variable and shipped an empty string in silence.
   [ -n "$key" ] || die "the credential for $cred_key came back empty. Refusing to launch: an empty credential silently runs the worker on your claude.ai subscription instead of $PROVIDER."
 
-  # One worker at a time, by decision: with one, the orchestrator reviews each
-  # result before the next task starts. Two means merging unverified work from
-  # two sources into one tree, and it was never enforced until now.
-  local existing=''
-  for f in "$RUN"/*.env; do
-    [ -f "$f" ] || continue
-    existing=${f##*/}; existing=${existing%.env}
-    break
-  done
-  [ -z "$existing" ] || die "worker $existing is already out. One at a time, so that each result is reviewed before the next task starts. Collect it, then: \"$SELF_DIR/sidecar.sh\" stop --worker $existing"
+  _no_worker_out
 
   git rev-parse --git-dir >/dev/null 2>&1 || die "not in a git repository. The worker hands work back as a branch."
 
@@ -538,27 +623,8 @@ $worker_rules"
   # The repository's own hooks are symlinked in beside it, since core.hooksPath
   # replaces the hooks directory rather than adding to it — without this, a
   # repo's pre-commit lint would silently stop running inside the worker.
-  local guard="$RUN/$worker.hooks" repo_hooks
-  mkdir -p "$guard" || die "cannot create $guard"
-  # Absolute, because the symlinks live in the guard directory rather than in
-  # the repository: `git rev-parse --git-path hooks` answers relative to the
-  # current directory (".git/hooks" from the root, "../.git/hooks" from a
-  # subdirectory), and a relative target would resolve against the guard
-  # directory and dangle. The first version of this shipped that way and the
-  # test did not catch it, because it asked "does the guard have a pre-commit,
-  # OR does the repo lack one" and this repository lacks one.
-  repo_hooks=$(git rev-parse --git-path hooks 2>/dev/null)
-  case $repo_hooks in /*) ;; ?*) repo_hooks="$PWD/$repo_hooks" ;; esac
-  if [ -n "$repo_hooks" ] && [ -d "$repo_hooks" ]; then
-    for h in "$repo_hooks"/*; do
-      [ -f "$h" ] || continue
-      case ${h##*/} in pre-push) continue ;; esac
-      ln -sf "$h" "$guard/${h##*/}" 2>/dev/null
-    done
-  fi
-  printf '#!/bin/sh\necho "sidecar: push refused. This worker hands work back as a branch for review; the session that dispatched it merges." >&2\nexit 1\n' \
-    > "$guard/pre-push" || die "cannot write the pre-push guard"
-  chmod +x "$guard/pre-push"
+  local guard
+  _make_guard guard "$worker"
 
   # The endpoint pair travels twice: in the environment, and in a settings file
   # passed with --settings. A background session does not always take
@@ -611,20 +677,105 @@ $worker_rules"
   echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
 }
 
+# The Gemini CLI as the worker (D16). The CLI runs the task headless in a
+# worktree of its own and exits; there is no session to attach to, no peer
+# messaging, and no credential of ours — the login is the user's Google account
+# in ~/.gemini/oauth_creds.json, made once by an interactive `gemini`. Google
+# forbids using that login from any other software, so the official CLI it is.
+_start_gemini() {
+  local profile=$1 model='' daily=''
+  _conf model "$profile" model || model=auto
+  _conf daily "$profile" daily_requests || daily=''
+  command -v gemini >/dev/null 2>&1 || die "gemini is not installed. npm i -g @google/gemini-cli, then run \`gemini\` once to sign in."
+  [ -f "$HOME/.gemini/oauth_creds.json" ] || die "not signed in to Gemini CLI: $HOME/.gemini/oauth_creds.json is missing. Run \`gemini\` once interactively and choose Login with Google; the worker cannot sign in for you."
+  _no_worker_out
+  git rev-parse --git-dir >/dev/null 2>&1 || die "not in a git repository. The worker hands work back as a branch."
+  local repo worker wt
+  repo=$(git rev-parse --show-toplevel)
+  worker="sidecar-$(date +%H%M%S)"
+  # The branch is named after the worker, so a second start within the same
+  # second (or a branch left from an earlier run) must not reuse the name.
+  local base=$worker n=1
+  while git show-ref --verify --quiet "refs/heads/$worker"; do
+    worker="$base-$n"; n=$((n + 1))
+  done
+  # The CLI does not make a worktree for a headless run, so this does — under
+  # the same path Claude Code uses for its background sessions, so `collect`
+  # finds both kinds the same way.
+  wt="$repo/.claude/worktrees/$worker"
+  mkdir -p "$repo/.claude/worktrees" || die "cannot create $repo/.claude/worktrees"
+  git worktree add -q -b "$worker" "$wt" >/dev/null 2>&1 || die "git worktree add failed for $wt (is the branch name $worker free?)"
+  local guard
+  _make_guard guard "$worker"
+  # The brief rides at the top of the prompt. GEMINI.md would be the CLI's
+  # standing-instruction file, but writing one into the worktree shows up in
+  # the diff and clobbers a repository's own GEMINI.md; the prompt does not.
+  local brief="You are Gemini, running the official Gemini CLI headless inside a git worktree on the branch $worker. Your work will be reviewed as a branch by the session that dispatched you, so commit it on this branch and stop there. Do not push, do not merge into any other branch, do not switch branches. If you cannot finish, commit what you have and say what is left. Your final answer is the report the reviewer reads: what changed, what you ran and its result, what is left."
+  local worker_rules
+  if _rules_section worker_rules "$SELF_DIR/providers/$PROVIDER.rules.md" Worker; then
+    brief="$brief
+
+Rules of engagement for $model on $PROVIDER:
+$worker_rules"
+  fi
+  local prompt="$brief
+
+TASK:
+$TASK"
+  local -a margs=()
+  [ "$model" != auto ] && margs=(-m "$model")
+  # --skip-trust: a fresh worktree is an untrusted folder and headless mode
+  # would otherwise stop on the trust question. yolo: nobody is there to
+  # approve tools. The exit code lands in .rc for status; stdout is the one
+  # JSON object the CLI prints when done.
+  # The wrapper's own descriptors are detached too: a background subshell that
+  # inherits the caller's stdout keeps a `$(sidecar.sh start …)` waiting until
+  # the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
+  # launching from a tool call would have hung with it.
+  (
+    cd "$wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
+      gemini -p "$prompt" -o json --approval-mode yolo --skip-trust ${margs[@]+"${margs[@]}"} \
+        < /dev/null > "$RUN/$worker.out" 2> "$RUN/$worker.err"
+    echo $? > "$RUN/$worker.rc"
+  ) < /dev/null > /dev/null 2>&1 &
+  local pid=$!
+  disown "$pid" 2>/dev/null
+  {
+    echo "worker=$worker"
+    echo "provider=$PROVIDER"
+    echo "model=$model"
+    echo "harness=gemini-cli"
+    echo "pid=$pid"
+    echo "worktree=$wt"
+    echo "repo=$repo"
+    echo "started=$(date +%s)"
+  } > "$RUN/$worker.env"
+  echo "worker $worker · $PROVIDER/$model (Gemini CLI, headless) · $wt"
+  [ -n "$daily" ] && echo "  budget:  $daily model requests a day on the plan; \"$SELF_DIR/sidecar.sh\" spend shows today's"
+  echo "  watch:   tail -f \"$RUN/$worker.err\"   (the JSON result arrives in $RUN/$worker.out when it exits)"
+  echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
+}
+
 cmd_status() {
   local f found=0 blob
   _agents blob
   for f in "$RUN"/*.env; do
     [ -f "$f" ] || continue
     found=1
-    local worker='' provider='' model='' repo='' line state=gone
+    local worker='' provider='' model='' repo='' pid='' line state=gone
     while IFS= read -r line || [ -n "$line" ]; do
       case ${line%%=*} in
         worker) worker=${line#*=} ;; provider) provider=${line#*=} ;;
-        model) model=${line#*=} ;; repo) repo=${line#*=} ;;
+        model) model=${line#*=} ;; repo) repo=${line#*=} ;; pid) pid=${line#*=} ;;
       esac
     done < "$f"
-    case $blob in *"\"name\": \"$worker\""*) state=live ;; esac
+    if [ -n "$pid" ]; then
+      if kill -0 "$pid" 2>/dev/null; then state=live
+      elif [ -f "$RUN/$worker.rc" ]; then state="exited($(cat "$RUN/$worker.rc"))"
+      fi
+    else
+      case $blob in *"\"name\": \"$worker\""*) state=live ;; esac
+    fi
     echo "$state  $worker  $provider/$model  $repo"
   done
   [ "$found" = 1 ] || echo "No workers."
@@ -635,11 +786,12 @@ cmd_collect() {
   [ -n "$WORKER" ] || die "collect needs --worker NAME."
   local f="$RUN/$WORKER.env"
   [ -f "$f" ] || die "no worker called $WORKER. Try: sidecar.sh status"
-  local provider='' model='' session='' repo='' line
+  local provider='' model='' session='' repo='' harness=claude worktree='' pid='' line
   while IFS= read -r line || [ -n "$line" ]; do
     case ${line%%=*} in
       provider) provider=${line#*=} ;; model) model=${line#*=} ;;
       session) session=${line#*=} ;; repo) repo=${line#*=} ;;
+      harness) harness=${line#*=} ;; worktree) worktree=${line#*=} ;; pid) pid=${line#*=} ;;
     esac
   done < "$f"
 
@@ -664,6 +816,10 @@ cmd_collect() {
   [ "$found" = 1 ] || echo "(no worktree yet — the worker may still be starting)"
 
   echo
+  if [ "$harness" = gemini-cli ]; then
+    _collect_gemini "$provider" "$model" "$pid"
+    return
+  fi
   # And one after, which is what makes a difference computable at all.
   _sample_balance "$provider" 2>/dev/null
 
@@ -739,15 +895,53 @@ cmd_collect() {
   fi
 }
 
+# What a Gemini CLI worker cost: model requests against the plan's daily
+# allowance, from the JSON the CLI printed on exit. Nothing is priced in money.
+_collect_gemini() {
+  local provider=$1 model=$2 pid=$3 out="$RUN/$WORKER.out" req pr ca outt daily='' today resp
+  echo "== what it cost =="
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "still running (pid $pid); the CLI prints its result and stats when it exits."
+    return 0
+  fi
+  if ! _gemini_stats req pr outt ca "$out"; then
+    echo "no stats yet: $out holds no JSON result. Exit code: $(cat "$RUN/$WORKER.rc" 2>/dev/null || echo unknown); stderr tail:"
+    tail -n 5 "$RUN/$WORKER.err" 2>/dev/null | sed 's/^/  /'
+    return 1
+  fi
+  _conf daily "$SELF_DIR/providers/$provider.conf" daily_requests || daily=''
+  echo "$provider/$model · $req model requests · no per-token cost ($provider bills as requests)"
+  echo "  Tokens are still counted: in $pr (+$ca cached), out $outt."
+  if _gemini_response resp "$out"; then
+    echo "== what it said =="
+    printf '%s\n' "${resp:0:1200}"
+  fi
+  if [ -f "$RUN/$WORKER.collected" ]; then
+    echo "(already collected once — not added to the count again)"
+  else
+    printf '%s %s %s\n' "$(date +%Y-%m-%d)" "$provider" "$req" >> "$REQUESTS"
+    : > "$RUN/$WORKER.collected"
+  fi
+  _requests_today today "$provider"
+  [ -n "$daily" ] && echo "today: $today of $daily requests on $provider"
+  return 0
+}
+
 cmd_stop() {
   [ -n "$WORKER" ] || die "stop needs --worker NAME."
   local f="$RUN/$WORKER.env"
   [ -f "$f" ] || die "no worker called $WORKER."
-  local session='' line
+  local session='' pid='' line
   while IFS= read -r line || [ -n "$line" ]; do
-    case ${line%%=*} in session) session=${line#*=} ;; esac
+    case ${line%%=*} in session) session=${line#*=} ;; pid) pid=${line#*=} ;; esac
   done < "$f"
   [ -n "$session" ] && claude stop "${session%%-*}" 2>&1 | head -1
+  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+    pkill -P "$pid" 2>/dev/null   # the gemini process under the launching subshell
+    kill "$pid" 2>/dev/null
+    echo "killed pid $pid"
+  fi
+  rm -f "$RUN/$WORKER.out" "$RUN/$WORKER.err" "$RUN/$WORKER.rc"
   # The guard directory holds only our pre-push and symlinks to the repo's own
   # hooks, so removing it takes nothing of the user's with it.
   rm -f "$RUN/$WORKER.hooks"/* 2>/dev/null
@@ -757,6 +951,14 @@ cmd_stop() {
 }
 
 cmd_spend() {
+  local prof pname today daily
+  for prof in "$SELF_DIR"/providers/*.conf; do
+    [ -f "$prof" ] || continue
+    _conf daily "$prof" daily_requests || continue
+    pname=${prof##*/}; pname=${pname%.conf}
+    _requests_today today "$pname"
+    echo "$pname: $today of $daily model requests today (the plan's daily allowance, not money)"
+  done
   local micro dollars billed bdollars over=''
   # Take a reading first, so `spend` is also the way to keep the log fed on a
   # month where no worker has been collected.

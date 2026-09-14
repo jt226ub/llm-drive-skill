@@ -32,7 +32,7 @@ status line and drive Claude Code's own hooks.
 | Module | Switch | What it does | Status |
 | --- | --- | --- | --- |
 | [budget](#budget-mode--pausing-before-a-rate-limit) | `/budget-on` | Watches the subscription's 5-hour and weekly rate-limit windows; makes the session write its handoff and park itself before one is hit. | **built** |
-| sidecar | `/sidecar-on [provider]` | Delegates coding work to a model on a third-party API — DeepSeek, Kimi, GLM, anything exposing an Anthropic-shaped endpoint — running inside its own Claude Code session, so it spends that provider's money and none of the subscription's windows. Each provider carries rules of engagement (`providers/NAME.rules.md`): the orchestrator's section is injected per prompt while the mode is on, the worker's rides in its system prompt. | **built**, see [`modules/sidecar/DESIGN.md`](modules/sidecar/DESIGN.md) |
+| sidecar | `/sidecar-on [provider]` | Delegates coding work to a model on a third-party API — DeepSeek, Kimi, GLM, anything exposing an Anthropic-shaped endpoint — running inside its own Claude Code session, so it spends that provider's money and none of the subscription's windows. Each provider carries rules of engagement (`providers/NAME.rules.md`): the orchestrator's section is injected per prompt while the mode is on, the worker's rides in its system prompt. A profile with `harness=gemini-cli` runs the official Gemini CLI headless as the worker instead (the Google AI Pro plan's 1,500 requests a day), D16. | **built**, see [`modules/sidecar/DESIGN.md`](modules/sidecar/DESIGN.md) |
 
 Where drive governs *how* work is finished, budget governs *when it has to
 stop*, and sidecar governs *who does it*.

@@ -667,3 +667,36 @@ conduct for the model, noise for the dispatcher). Providers whose numbers
 change per session (a Kaggle kernel's decode rate and context) write their own
 `NAME.rules.md` from their launcher at READY — the Anthropic Sidecar project
 does that — and this module reads whatever is there.
+
+## 13. A second worker shape: the Gemini CLI — 2026-09-14
+
+The user's Google AI Pro plan gives Gemini CLI 1,500 model requests a day and funds no
+API key; Google names using the CLI's OAuth from any other software as a terms
+violation and suspended accounts for it in February–March 2026. So the plan's quota
+can be spent by exactly one thing: the official CLI. `providers/gemini-cli.conf`
+declares `harness=gemini-cli`, and `start` runs the CLI headless instead of a Claude
+Code session:
+
+- `gemini -p "<brief + Worker rules + task>" -o json --approval-mode yolo --skip-trust`
+  inside a worktree the sidecar creates at `.claude/worktrees/<worker>` on a branch of
+  the same name (Claude Code made that worktree itself; the CLI does not). The brief
+  rides in the prompt, not in a `GEMINI.md`, because a file in the worktree would show
+  in the diff and clobber a repository's own.
+- The run record holds `harness`, `pid` and `worktree`; `status` reads the pid
+  (`live` / `exited(rc)`), `stop` kills it. No session id, no `claude attach`, no peer
+  messaging — the CLI runs to completion and prints one JSON object.
+- `collect` sums `stats.models.*.api.totalRequests` and the model token counts from
+  that JSON (roles nest inside each model with their own counts and are skipped),
+  prints the `response`, and records requests in `~/.claude/sidecar-requests`;
+  `billing=requests` with `daily_requests=1500` makes `spend` show today's count.
+- The push guard is unchanged: it is `GIT_CONFIG_*`, so any git process obeys it.
+- Preflight: the CLI must be installed and `~/.gemini/oauth_creds.json` must exist;
+  the login itself is interactive and the user's.
+
+Rejected: any proxy of the CLI's OAuth (terms; suspensions); `GEMINI_SYSTEM_MD` (it
+replaces the whole system prompt); the CLI's own `-w` worktree flag (its location is
+undocumented and `collect` needs to find the worktree).
+
+Verified with a stub `gemini` in `tests/run-tests.sh` (argv, env, cwd, commit, JSON
+stats, exit codes, a hanging worker killed by `stop`). Not yet run against the real
+CLI: the login needs the user at the machine.

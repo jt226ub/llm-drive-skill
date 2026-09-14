@@ -667,3 +667,25 @@ telling the worker the orchestrator's section.
 provider with no rules file behaves exactly as before. Launchers that know a
 session's real numbers (Anthropic Sidecar for Kaggle) own their provider's
 rules file and rewrite it at READY.
+
+## D16 — The Gemini CLI is a worker shape of its own, launched headless in a sidecar-made worktree
+
+**Date** 2026-09-14 · **Status** accepted (built against a stub; live run pending the user's login)
+
+**Context.** The user's Google AI Pro plan grants Gemini CLI 1,500 model requests a day
+and no API key. Google's terms forbid using the CLI's OAuth from other software and
+Google suspended accounts for it. The sidecar assumed Claude Code as the only harness.
+
+**Decision.** A profile key `harness=gemini-cli`. `start` creates the worktree and
+branch, runs `gemini -p … -o json --approval-mode yolo --skip-trust` in it with the
+push guard in the environment, and records a pid. `status`/`stop` work from the pid;
+`collect` reads the CLI's JSON stats and counts requests against `daily_requests`
+(`billing=requests`); the brief and the provider's Worker rules ride in the prompt.
+
+**Rejected.** OAuth proxies exposing `/v1/messages` (terms violation, suspensions);
+`GEMINI.md` in the worktree (shows in the diff, clobbers a repo's own); the CLI's
+`-w` worktree flag (location undocumented); a Gemini API key (paid, separate).
+
+**Consequences.** Two worker shapes to keep in step; no peer messaging with a Gemini
+worker; a second ledger (`sidecar-requests`, requests not money). The rules-of-engagement
+feature (D15) carries over unchanged.
