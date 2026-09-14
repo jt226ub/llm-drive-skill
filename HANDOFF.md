@@ -25,6 +25,18 @@ to collect), and the `billing=time` provider once a Kaggle endpoint exists —
 settled about its shape.
 
 
+## Rules of engagement per provider — 2026-09-13
+
+Built at the user's request (D15, `modules/sidecar/DESIGN.md` §12): `providers/NAME.rules.md`
+with `## Orchestrator` (injected per prompt by `hooks/sidecar-mode.sh` while the mode is on,
+capped at 15 lines by test) and `## Worker` (appended to the worker's system prompt by `start`).
+`sidecar.sh rules`, `on --provider NAME` and `off` were added; `/sidecar-on NAME` and `/sidecar-off`
+now call them instead of touching the flag file, and the flag file holds the provider name.
+Verified: 321 tests pass (the one failure, "an older stamp reports its age in days", is the
+pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live substituted the
+argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
+Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
+
 ## What this session did
 
 **Budget module: built, installed, live.** Sensor, gate, park and resume, with

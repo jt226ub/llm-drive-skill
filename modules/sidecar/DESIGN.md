@@ -631,3 +631,39 @@ default config directory, and the worktree comes for free.
 
 None of what is left changes the topology. The build can start, and its first
 piece is the launcher.
+
+## 12. Rules of engagement per provider — 2026-09-13
+
+The user asked for model-specific instructions: the sidecar enforces one worker
+at a time (D12), but nothing told the dispatching session *how* a given provider
+should be used — a Kaggle TPU is a rapid iterative coder to be fed many small
+tasks at a stated token rate; DeepSeek is cheap on long cached loops — and
+nothing told the worker what its particular model gets wrong.
+
+**Shape.** One file per provider beside its profile, `providers/NAME.rules.md`,
+with two headed sections and nothing else that is read:
+
+- `## Orchestrator` — how the session that dispatches should use this model.
+  Injected into every prompt while sidecar mode is on by
+  `hooks/sidecar-mode.sh`, a copy of the drive-mode hook's shape (flag file,
+  plain stdout, pure bash, exit 0). Capped at 15 lines by test, because the
+  drive contract already costs ~120 lines per turn; the full text is
+  `sidecar.sh rules [--provider NAME]`.
+- `## Worker` — appended to the worker's system prompt after the hand-off brief
+  by `start`, as "Rules of engagement for MODEL on PROVIDER:". Optional; a
+  provider without the file gets the brief alone.
+
+**Which provider.** `/sidecar-on NAME` writes the name into the flag file
+(`$HOME/.claude/sidecar-mode`); `start` and `rules` read it when `--provider`
+is not given, and the hook reads it to choose the rules file. An empty or
+malformed line means deepseek, as before. The hook's header also says whether a
+worker is out, read from `$HOME/.claude/sidecar-run/*.env`, so the orchestrator
+is reminded to collect before dispatching again.
+
+**What was rejected.** Putting the rules in the profile `.conf` (a `key=value`
+file cannot hold prose); a single skill-level rules block (it is per model by
+the user's ask); injecting the Worker section into the orchestrator too (it is
+conduct for the model, noise for the dispatcher). Providers whose numbers
+change per session (a Kaggle kernel's decode rate and context) write their own
+`NAME.rules.md` from their launcher at READY — the Anthropic Sidecar project
+does that — and this module reads whatever is there.

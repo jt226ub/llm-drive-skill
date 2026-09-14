@@ -641,3 +641,29 @@ lifetime. A test now asserts the file's location, contents, mode and JSON
 validity, that a quote or backslash in a credential survives the escaping, and
 that `stop` removes it. Whether a future Claude Code honours the environment for
 `--bg` again does not matter; the settings route is the one relied on.
+
+## D15 — Rules of engagement live in `providers/NAME.rules.md`, read by the hook and by `start`
+
+**Date** 2026-09-13 · **Status** accepted
+
+**Context.** One worker at a time was enforced (D12) but no provider-specific
+guidance reached either party: the orchestrator did not know how to pace a
+given provider, and the worker's brief was the same for every model. The user
+asked for per-model rules — Kaggle as a rapid iterative coder fed many queued
+tasks at a stated rate — with the single-worker rule kept.
+
+**Decision.** A markdown file per provider with `## Orchestrator` and
+`## Worker` sections. `sidecar-mode.sh` (UserPromptSubmit, flag-gated like
+drive mode) injects the Orchestrator section, capped at 15 lines by test;
+`sidecar.sh rules` prints it in full; `start` appends the Worker section to the
+system-prompt brief. `/sidecar-on NAME` records the provider in the flag file,
+which `start`, `rules` and the hook read as the default.
+
+**Rejected.** Prose in the `.conf` profile; one global rules block; a longer
+per-prompt injection (the drive contract already costs ~120 lines a turn);
+telling the worker the orchestrator's section.
+
+**Consequences.** Every prompt in sidecar mode carries up to 16 more lines. A
+provider with no rules file behaves exactly as before. Launchers that know a
+session's real numbers (Anthropic Sidecar for Kaggle) own their provider's
+rules file and rewrite it at READY.

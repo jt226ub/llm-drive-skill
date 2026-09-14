@@ -68,6 +68,11 @@ cp "$SRC/modules/sidecar/sidecar.sh"  "$CLAUDE_DIR/drive-sidecar/sidecar.sh"
 cp "$SRC/modules/sidecar/guard.sh"    "$CLAUDE_DIR/drive-sidecar/guard.sh"
 cp "$SRC/modules/sidecar/prices.conf" "$CLAUDE_DIR/drive-sidecar/prices.conf"
 cp "$SRC/modules/sidecar/providers/"*.conf "$CLAUDE_DIR/drive-sidecar/providers/"
+# Rules of engagement per provider, and the hook that puts a provider's
+# orchestrator section in front of every prompt while sidecar mode is on.
+cp "$SRC/modules/sidecar/providers/"*.rules.md "$CLAUDE_DIR/drive-sidecar/providers/"
+cp "$SRC/hooks/sidecar-mode.sh" "$CLAUDE_DIR/hooks/sidecar-mode.sh"
+chmod +x "$CLAUDE_DIR/hooks/sidecar-mode.sh"
 chmod +x "$CLAUDE_DIR/drive-sidecar/sidecar.sh" "$CLAUDE_DIR/drive-sidecar/guard.sh"
 # Written once and never overwritten, so an edited cap survives a reinstall.
 if [ ! -f "$CLAUDE_DIR/sidecar-config" ]; then
@@ -122,11 +127,13 @@ echo "Installed skill, commands, hook and budget module into $CLAUDE_DIR"
 # else needs the literal path.
 if [ "$CLAUDE_DIR" = "$HOME/.claude" ]; then
   HOOK_CMD='"$HOME/.claude/hooks/drive-mode.sh"'
+  SCMODE_CMD='"$HOME/.claude/hooks/sidecar-mode.sh"'
   GATE_CMD='"$HOME/.claude/drive-budget/gate.sh"'
   SENSOR_CMD='"$HOME/.claude/drive-budget/sensor.sh"'
   SCGUARD_CMD='"$HOME/.claude/drive-sidecar/guard.sh"'
 else
   HOOK_CMD="\"$CLAUDE_DIR/hooks/drive-mode.sh\""
+  SCMODE_CMD="\"$CLAUDE_DIR/hooks/sidecar-mode.sh\""
   GATE_CMD="\"$CLAUDE_DIR/drive-budget/gate.sh\""
   SENSOR_CMD="\"$CLAUDE_DIR/drive-budget/sensor.sh\""
   SCGUARD_CMD="\"$CLAUDE_DIR/drive-sidecar/guard.sh\""
@@ -196,6 +203,7 @@ register UserPromptSubmit "$HOOK_CMD"        drive-mode.sh "the drive hook"     
 register UserPromptSubmit "$GATE_CMD prompt" gate.sh       "the budget prompt hook"   || RC=1
 register PreToolUse       "$GATE_CMD tool"   gate.sh       "the budget tool gate"     || RC=1
 register PreToolUse       "$SCGUARD_CMD"     guard.sh      "the sidecar push guard"   || RC=1
+register UserPromptSubmit "$SCMODE_CMD"      sidecar-mode.sh "the sidecar rules hook" || RC=1
 
 # The status line is the sensor, and settings.json holds only one. Ours goes in
 # only when the slot is free; an existing status line — anyone's, including an

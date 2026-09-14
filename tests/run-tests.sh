@@ -66,7 +66,7 @@ group "Dependency floor — the whole point of the rewrite"
 # literal # inside a string — but it only ever removes text from the search, and
 # these scripts have no such string.
 AUDIT_TOOLS="jq perl python python3 awk sed node"
-for f in install.sh uninstall.sh lib.sh hooks/drive-mode.sh omniroute/install-omniroute.sh \
+for f in install.sh uninstall.sh lib.sh hooks/drive-mode.sh hooks/sidecar-mode.sh omniroute/install-omniroute.sh \
          modules/budget/sensor.sh modules/budget/gate.sh modules/budget/park.sh modules/budget/resume.sh; do
   found=""
   while IFS= read -r line; do
@@ -323,12 +323,13 @@ if CLAUDE_DIR="$E2E" bash "$ROOT/install.sh" > "$WORK/install.log" 2>&1; then
 else
   bad "install.sh exits clean" "$(cat "$WORK/install.log")"
 fi
-for want in skills/drive/SKILL.md commands/drive-on.md commands/drive-off.md hooks/drive-mode.sh; do
+for want in skills/drive/SKILL.md commands/drive-on.md commands/drive-off.md hooks/drive-mode.sh hooks/sidecar-mode.sh drive-sidecar/providers/deepseek.rules.md; do
   if [ -f "$E2E/$want" ]; then ok "install.sh placed $want"; else bad "install.sh placed $want"; fi
 done
 if [ -x "$E2E/hooks/drive-mode.sh" ]; then ok "the hook is executable"; else bad "the hook is executable"; fi
 assert_json "$E2E/settings.json" "install.sh leaves valid JSON"
 if settings_hook_registered "$E2E/settings.json" drive-mode.sh; then ok "install.sh registered the hook"; else bad "install.sh registered the hook"; fi
+if settings_hook_registered "$E2E/settings.json" sidecar-mode.sh; then ok "install.sh registered the sidecar rules hook"; else bad "install.sh registered the sidecar rules hook"; fi
 if ls "$E2E"/settings.json.bak.* >/dev/null 2>&1; then ok "install.sh wrote a backup"; else bad "install.sh wrote a backup"; fi
 if [ "$HAVE_PY" = 1 ]; then
   assert_eq 'Bash(git status:*)' "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["permissions"]["allow"][0])' "$E2E/settings.json")" \
@@ -350,7 +351,7 @@ if CLAUDE_DIR="$E2E" bash "$ROOT/uninstall.sh" > "$WORK/uninstall.log" 2>&1; the
 else
   bad "uninstall.sh exits clean" "$(cat "$WORK/uninstall.log")"
 fi
-for gone in skills/drive/SKILL.md commands/drive-on.md commands/drive-off.md hooks/drive-mode.sh drive-mode; do
+for gone in skills/drive/SKILL.md commands/drive-on.md commands/drive-off.md hooks/drive-mode.sh drive-mode hooks/sidecar-mode.sh drive-sidecar/providers/deepseek.rules.md; do
   if [ -e "$E2E/$gone" ]; then bad "uninstall.sh removed $gone"; else ok "uninstall.sh removed $gone"; fi
 done
 if [ "$(cat "$E2E/settings.json")" = "$(printf '%s' "$ORIGINAL")" ]; then
@@ -1282,6 +1283,11 @@ if [ -f "$CLAUDE_ARGV" ]; then
       ok "the brief names the real model and rides in the system prompt, not in front of the task" ;;
     *) bad "the hand-off brief rides in the system prompt (prepending it left the session with an empty prompt)" "$ARGV" ;;
   esac
+  case $ARGV in
+    *"--append-system-prompt"*"Do not push"*"Rules of engagement for deepseek-flash on deepseek:"*"Run the tests you touch"*)
+      ok "the provider's Worker rules follow the brief in the system prompt" ;;
+    *) bad "the provider's Worker rules follow the brief in the system prompt" "$ARGV" ;;
+  esac
   # The guard that actually holds. GIT_CONFIG_* is inherited by any git process
   # however it is spelled, so unlike a permission rule it is not defeated by
   # `git -C .`, `git -c …`, an absolute path, or `sh -c`.
@@ -1472,6 +1478,90 @@ else
   bad "and writes no money row for a provider that charges none"
 fi
 rm -f "$SCHOME/.claude/sidecar-run/walt.env"
+
+# ---------------------------------------------------------------------------
+group "Sidecar — rules of engagement per provider"
+# ---------------------------------------------------------------------------
+RULES_FIX="$WORK/fixture.rules.md"
+printf '# title\n\nprose nobody reads\n\n## Orchestrator\n\n- first rule\n- second rule\n\n\n## Worker\n- be terse\n\n## Notes\nignored\n' > "$RULES_FIX"
+rules_fn() { bash -c 'set -u; eval "$(/usr/bin/sed -n "/^_rules_section()/,/^}/p" "'"$SC"'")"; '"$1"; }
+assert_eq "- first rule
+- second rule" "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Orchestrator; printf "%s" "$r"')" \
+  "the Orchestrator section is read up to the next heading, blank lines trimmed"
+assert_eq "- be terse" "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Worker; printf "%s" "$r"')" "and the Worker section likewise"
+assert_eq 1 "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Nope; echo $?')" "a missing section returns 1 rather than an empty string"
+assert_eq 1 "$(rules_fn '_rules_section r "'"$WORK/absent.md"'" Worker; echo $?')" "and so does a missing file, so a provider without rules changes nothing"
+printf '## Orchestrator\n\n\n## Worker\nx\n' > "$WORK/empty.rules.md"
+assert_eq 1 "$(rules_fn '_rules_section r "'"$WORK/empty.rules.md"'" Orchestrator; echo $?')" "an empty section counts as absent"
+
+# The shipped file: both sections, and the per-prompt one short enough to ride every turn.
+SHIPPED="$ROOT/modules/sidecar/providers/deepseek.rules.md"
+ORCH_LINES=$(rules_fn '_rules_section r "'"$SHIPPED"'" Orchestrator; printf "%s\n" "$r"' | wc -l | tr -d ' ')
+if [ "$ORCH_LINES" -ge 1 ] && [ "$ORCH_LINES" -le 15 ]; then ok "the shipped DeepSeek Orchestrator section is 1–15 lines ($ORCH_LINES)"
+else bad "the shipped DeepSeek Orchestrator section is 1–15 lines" "got $ORCH_LINES"; fi
+if rules_fn '_rules_section r "'"$SHIPPED"'" Worker' >/dev/null; then ok "and it has a Worker section"; else bad "and it has a Worker section"; fi
+
+# `rules` prints the Orchestrator section; a provider without a profile is refused.
+case "$(sc rules)" in
+  *"deepseek (deepseek-flash)"*"One worker at a time is enforced"*) ok "rules prints the provider's Orchestrator section" ;;
+  *) bad "rules prints the provider's Orchestrator section" "$(sc rules)" ;;
+esac
+case "$(sc rules --provider nosuch)" in
+  *"no profile at"*) ok "rules refuses a provider with no profile" ;;
+  *) bad "rules refuses a provider with no profile" "$(sc rules --provider nosuch)" ;;
+esac
+
+# on/off: the flag file carries the provider, and on refuses an unknown one.
+case "$(sc on --provider nosuch)" in
+  *"no profile at"*) ok "on refuses a provider with no profile" ;;
+  *) bad "on refuses a provider with no profile" "$(sc on --provider nosuch)" ;;
+esac
+sc on --provider deepseek >/dev/null
+assert_eq deepseek "$(cat "$SCHOME/.claude/sidecar-mode")" "on records the provider in the flag file"
+sc on --provider '' >/dev/null
+assert_eq deepseek "$(cat "$SCHOME/.claude/sidecar-mode")" "on with an empty name records the default"
+# The flag's provider is the default for start and rules; a malformed line falls back.
+printf 'kaggle-tpu\n' > "$SCHOME/.claude/sidecar-mode"
+case "$(sc start --task x)" in
+  *"no profile at"*"kaggle-tpu.conf"*) ok "start takes the provider from the flag file when --provider is absent" ;;
+  *) bad "start takes the provider from the flag file" "$(sc start --task x)" ;;
+esac
+printf '../evil\n' > "$SCHOME/.claude/sidecar-mode"
+case "$(sc rules)" in
+  *"deepseek (deepseek-flash)"*) ok "a malformed flag line falls back to deepseek rather than becoming a path" ;;
+  *) bad "a malformed flag line falls back to deepseek" "$(sc rules)" ;;
+esac
+sc off >/dev/null
+if [ ! -e "$SCHOME/.claude/sidecar-mode" ]; then ok "off removes the flag"; else bad "off removes the flag"; fi
+touch "$SCHOME/.claude/sidecar-mode"
+
+# The hook: silent when off; header + Orchestrator section when on; names a worker that is out.
+HHOME="$WORK/hhome"; mkdir -p "$HHOME/.claude/drive-sidecar/providers" "$HHOME/.claude/sidecar-run"
+cp "$SHIPPED" "$HHOME/.claude/drive-sidecar/providers/deepseek.rules.md"
+cp "$RULES_FIX" "$HHOME/.claude/drive-sidecar/providers/fix.rules.md"
+assert_eq "" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" "the sidecar hook prints nothing while the mode is off"
+printf 'fix\n' > "$HHOME/.claude/sidecar-mode"
+HOOK_OUT="$(HOME="$HHOME" PATH="" /bin/bash "$ROOT/hooks/sidecar-mode.sh" 2>/dev/null)"
+assert_eq "SIDECAR MODE IS ON (provider fix; no worker out; turn off with /sidecar-off). Rules of engagement for dispatching to fix:
+- first rule
+- second rule" "$HOOK_OUT" "on: the hook names the provider and injects its Orchestrator section (bare PATH, pure bash)"
+assert_eq "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Orchestrator; printf "%s\n" "$r"')" "$(printf '%s\n' "$HOOK_OUT" | tail -n +2)" \
+  "the hook's section reader agrees with sidecar.sh's on the same fixture"
+printf 'worker=w-42\n' > "$HHOME/.claude/sidecar-run/w-42.env"
+case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
+  "SIDECAR MODE IS ON (provider fix; worker w-42 is out"*) ok "with a worker out, the header says so" ;;
+  *) bad "with a worker out, the header says so" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" ;;
+esac
+printf 'nosuch\n' > "$HHOME/.claude/sidecar-mode"
+case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
+  *"no rules written for nosuch"*) ok "a provider without a rules file gets the header and a pointer, not a failure" ;;
+  *) bad "a provider without a rules file gets the header and a pointer" ;;
+esac
+: > "$HHOME/.claude/sidecar-mode"
+case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
+  "SIDECAR MODE IS ON (provider deepseek;"*"One worker at a time is enforced"*) ok "an empty flag means deepseek, the shipped rules" ;;
+  *) bad "an empty flag means deepseek" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" ;;
+esac
 
 # ---------------------------------------------------------------------------
 group "Sidecar — the status line segment the budget sensor prints"

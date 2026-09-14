@@ -64,6 +64,30 @@ die() { echo "sidecar: $1" >&2; exit 1; }
 # nothing. _credential had exactly that — called as `_credential key KEY` while
 # declaring `local key=$2` — and it shipped an empty credential without a word.
 
+# _rules_section VARNAME FILE SECTION — the body of `## SECTION` in a provider's
+# rules of engagement (providers/NAME.rules.md), up to the next `## ` heading,
+# without the blank lines at either end. Returns 1 when the file or the section
+# is absent or empty, so a provider without rules changes nothing. Two sections
+# are read: `## Orchestrator` (how the dispatching session should use this
+# model — the sidecar-mode hook injects it) and `## Worker` (appended to the
+# worker's system prompt after the hand-off brief).
+_rules_section() {
+  local __rl __in=0 __body='' __want="## $3"
+  [ -f "$2" ] || return 1
+  while IFS= read -r __rl || [ -n "$__rl" ]; do
+    if [ "$__in" = 1 ]; then
+      case $__rl in "## "*) break ;; esac
+      __body="$__body$__rl"$'\n'
+    elif [ "$__rl" = "$__want" ]; then
+      __in=1
+    fi
+  done < "$2"
+  while [ "${__body#$'\n'}" != "$__body" ]; do __body=${__body#$'\n'}; done
+  while [ "${__body%$'\n'}" != "$__body" ]; do __body=${__body%$'\n'}; done
+  [ -n "$__body" ] || return 1
+  eval "$1=\$__body"
+}
+
 # _conf VARNAME FILE KEY — read `key=value` from a profile.
 _conf() {
   local __v=$1 __file=$2 __key=$3 __line __out=''
@@ -490,6 +514,16 @@ cmd_start() {
   local brief="You are running on $PROVIDER's $model, reached through an Anthropic-compatible endpoint. Your harness is Claude Code and everything it tells you about tools, permissions and files is accurate, but anything in it that identifies you as a Claude model is not: you are $model. Do not describe yourself as a Claude model, and do not put Claude co-authorship or attribution in commit messages.
 
 Your work will be reviewed as a branch by the session that dispatched you, so commit it and stop there. Do not push, and do not merge into any other branch. If you cannot finish, commit what you have and say what is left."
+  # Per-provider conduct, after the brief: what this particular model needs to
+  # be told (how to pace itself, what it gets wrong). Optional — a provider with
+  # no rules.md gets the brief alone.
+  local worker_rules
+  if _rules_section worker_rules "$SELF_DIR/providers/$PROVIDER.rules.md" Worker; then
+    brief="$brief
+
+Rules of engagement for $model on $PROVIDER:
+$worker_rules"
+  fi
   # A refusing pre-push hook, reached through the environment rather than the
   # repository's configuration, so nothing in the user's repo is modified.
   #
@@ -745,9 +779,40 @@ cmd_spend() {
   fi
 }
 
+# The orchestrator's side of a provider's rules of engagement, on demand. The
+# sidecar-mode hook injects the same section into every prompt while the mode
+# is on; this is for reading it in full, or another provider's.
+cmd_rules() {
+  local profile="$SELF_DIR/providers/$PROVIDER.conf" model='' rules
+  [ -f "$profile" ] || die "no profile at $profile."
+  _conf model "$profile" model || model='?'
+  echo "$PROVIDER ($model) — rules of engagement for the session that dispatches work to it:"
+  if _rules_section rules "$SELF_DIR/providers/$PROVIDER.rules.md" Orchestrator; then
+    printf '%s\n' "$rules"
+  else
+    echo "  none written. Add a \`## Orchestrator\` section to $SELF_DIR/providers/$PROVIDER.rules.md."
+  fi
+}
+
+# /sidecar-on NAME and /sidecar-off call these rather than touching the flag
+# themselves: the provider is checked against its profile before it is
+# recorded, and the command files carry no shell redirect (a redirect target is
+# permission-checked as a file write; a script call is a plain Bash rule).
+cmd_on() {
+  local profile="$SELF_DIR/providers/$PROVIDER.conf"
+  [ -f "$profile" ] || die "no profile at $profile — sidecar mode left as it was."
+  printf '%s\n' "$PROVIDER" > "$FLAG" || die "cannot write $FLAG"
+  echo "sidecar mode on: provider $PROVIDER (recorded in $FLAG)"
+}
+
+cmd_off() {
+  rm -f "$FLAG"
+  echo "sidecar mode off"
+}
+
 # ---------------------------------------------------------------------------
 
-TASK=''; WORKER=''; PROVIDER=deepseek; PERMISSION_MODE=auto
+TASK=''; WORKER=''; PROVIDER=''; PERMISSION_MODE=auto
 CMD=${1:-}; shift 2>/dev/null || true
 while [ $# -gt 0 ]; do
   case $1 in
@@ -758,6 +823,17 @@ while [ $# -gt 0 ]; do
     *) die "unknown argument $1" ;;
   esac
 done
+# The provider: --provider, else the name /sidecar-on wrote into the flag file
+# (`/sidecar-on kaggle-tpu`), else deepseek as before. Only a plain name is
+# taken from the file, since it becomes a path under providers/.
+if [ -z "$PROVIDER" ]; then
+  if [ -f "$FLAG" ]; then
+    IFS= read -r PROVIDER < "$FLAG" || true
+    PROVIDER=${PROVIDER// /}
+    case $PROVIDER in *[!A-Za-z0-9_-]*) PROVIDER='' ;; esac
+  fi
+  PROVIDER=${PROVIDER:-deepseek}
+fi
 
 case $CMD in
   start)   cmd_start ;;
@@ -765,12 +841,20 @@ case $CMD in
   collect) cmd_collect ;;
   stop)    cmd_stop ;;
   spend)   cmd_spend ;;
+  rules)   cmd_rules ;;
+  on)      cmd_on ;;
+  off)     cmd_off ;;
   *) cat >&2 <<USAGE
 sidecar.sh start  --task TEXT [--provider NAME] [--permission-mode MODE]
 sidecar.sh status
 sidecar.sh collect --worker NAME
 sidecar.sh stop    --worker NAME
 sidecar.sh spend
+sidecar.sh rules   [--provider NAME]   the provider's rules of engagement for the dispatching session
+sidecar.sh on      [--provider NAME]   what /sidecar-on runs: record the provider and switch the mode on
+sidecar.sh off
+
+--provider defaults to the name /sidecar-on was given (the flag file), else deepseek.
 
 --permission-mode defaults to auto, to match an orchestrator running in auto.
 It is deliberately not narrowed: acceptEdits lets a worker write a file and then
