@@ -1567,82 +1567,112 @@ case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
 esac
 
 # ---------------------------------------------------------------------------
-group "Sidecar — the Gemini CLI as the worker (headless, in a worktree)"
+group "Sidecar — the Antigravity CLI as the worker (headless, in a worktree)"
 # ---------------------------------------------------------------------------
-# A stub `gemini` that records argv and env, does a commit in its cwd (the
-# worktree), prints the JSON shape the real CLI prints for -o json, and exits 0.
-# GEMINI_STUB_SLEEP makes it hang instead, for the stop test.
-cat > "$SCSTUB/gemini" <<'STUBEOF'
+# A stub `agy` that records argv and env, does a commit in its cwd (the
+# worktree), prints the JSON envelope the real CLI prints for --output-format
+# json (measured on agy 1.2.2), and exits 0. AGY_STUB_SLEEP makes it hang
+# instead, for the stop test; AGY_STUB_QUOTA makes it fail with a quota error.
+cat > "$SCSTUB/agy" <<'STUBEOF'
 #!/bin/bash
-printf '%s\n' "$@" > "$GEMINI_ARGV"
-env > "$GEMINI_ENV"
-pwd > "$GEMINI_CWD"
-if [ -n "${GEMINI_STUB_SLEEP:-}" ]; then sleep "$GEMINI_STUB_SLEEP"; exit 0; fi
+printf '%s\n' "$@" > "$AGY_ARGV"
+env > "$AGY_ENV"
+pwd > "$AGY_CWD"
+if [ -n "${AGY_STUB_SLEEP:-}" ]; then sleep "$AGY_STUB_SLEEP"; exit 0; fi
+if [ -n "${AGY_STUB_QUOTA:-}" ]; then
+  printf '%s\n' '{"conversation_id":"c2","status":"ERROR","response":"","error":"model quota exhausted for this window; it refreshes at 18:00","duration_seconds":0.4,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}'
+  exit 1
+fi
 echo "stub work" > done.txt
 git add done.txt && git -c user.email=s@s -c user.name=stub commit -q -m "stub work"
-printf '%s\n' '{"session_id":"abc","response":"Added done.txt and committed.\nTests: ok","stats":{"models":{"gemini-2.5-pro":{"api":{"totalRequests":7,"totalErrors":0,"totalLatencyMs":900,"errorsByType":{}},"tokens":{"input":100,"prompt":120,"candidates":30,"total":150,"cached":20,"thoughts":5,"tool":0},"roles":{"main":{"totalRequests":7,"totalErrors":0,"totalLatencyMs":900,"tokens":{"input":100,"prompt":120,"candidates":30,"total":150,"cached":20,"thoughts":5,"tool":0}}}},"gemini-2.5-flash":{"api":{"totalRequests":3,"totalErrors":0,"totalLatencyMs":100,"errorsByType":{}},"tokens":{"input":10,"prompt":12,"candidates":4,"total":16,"cached":2,"thoughts":0,"tool":0},"roles":{}}},"tools":{"totalCalls":4,"totalSuccess":4,"totalFail":0,"totalDurationMs":50,"totalDecisions":{},"byName":{}},"files":{"totalLinesAdded":1,"totalLinesRemoved":0}}}'
+printf '%s\n' '{"conversation_id":"c1","status":"SUCCESS","response":"Added done.txt and committed.\nTests: ok","error":"","duration_seconds":20.9,"num_turns":1,"usage":{"input_tokens":13051,"output_tokens":59,"thinking_tokens":58,"cache_read_tokens":20,"total_tokens":13110}}'
 exit 0
 STUBEOF
-chmod +x "$SCSTUB/gemini"
-export GEMINI_ARGV="$WORK/g-argv.txt" GEMINI_ENV="$WORK/g-env.txt" GEMINI_CWD="$WORK/g-cwd.txt"
+chmod +x "$SCSTUB/agy"
+export AGY_ARGV="$WORK/a-argv.txt" AGY_ENV="$WORK/a-env.txt" AGY_CWD="$WORK/a-cwd.txt"
 GREPO="$SCHOME/grepo"; mkdir -p "$GREPO"; git -C "$GREPO" init -q; git -C "$GREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
 # git answers with the physical path (/private/var on macOS), so compare against that
 GREPO_P=$(cd "$GREPO" && pwd -P)
 gsc() { ( cd "$GREPO" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$SC" "$@" ) 2>&1; }
-rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.gemini/oauth_creds.json"; touch "$SCHOME/.claude/sidecar-mode"
+AGYDIR="$SCHOME/.gemini/antigravity-cli"
+rm -rf "$AGYDIR"; rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests" "$SCHOME/.claude/sidecar-quota"; touch "$SCHOME/.claude/sidecar-mode"
 
-case "$(gsc start --provider gemini-cli --task x)" in
-  *"not signed in"*) ok "start refuses when there is no Gemini CLI login (oauth_creds.json)" ;;
-  *) bad "start refuses when there is no Gemini CLI login" "$(gsc start --provider gemini-cli --task x)" ;;
+case "$(gsc start --provider antigravity-cli --task x)" in
+  *"not signed in"*) ok "start refuses when there is no Antigravity CLI login (the CLI's oauth token file)" ;;
+  *) bad "start refuses when there is no Antigravity CLI login" "$(gsc start --provider antigravity-cli --task x)" ;;
 esac
-mkdir -p "$SCHOME/.gemini"; printf '{"access_token":"fake"}\n' > "$SCHOME/.gemini/oauth_creds.json"
-rm -f "$GEMINI_ARGV"
-OUT="$(gsc start --provider gemini-cli --task 'add done.txt and commit')"
+mkdir -p "$AGYDIR"; printf 'tok\n' > "$AGYDIR/antigravity-oauth-token"
+printf '{ "useG1Credits": true }\n' > "$AGYDIR/settings.json"
+case "$(gsc start --provider antigravity-cli --task x)" in *"useG1Credits=true"*"money"*) ok "start refuses while the CLI may fall back to purchased AI credits (money)" ;; *) bad "start refuses while the CLI may fall back to purchased AI credits" "$(gsc start --provider antigravity-cli --task x)" ;; esac
+printf '{}\n' > "$AGYDIR/settings.json"
+rm -f "$AGY_ARGV"
+OUT="$(gsc start --provider antigravity-cli --task 'add done.txt and commit')"
 GW=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
-case $OUT in *"Gemini CLI, headless"*) ok "start launches the Gemini CLI worker shape" ;; *) bad "start launches the Gemini CLI worker shape" "$OUT" ;; esac
+case $OUT in *"Antigravity CLI, headless"*) ok "start launches the Antigravity CLI worker shape" ;; *) bad "start launches the Antigravity CLI worker shape" "$OUT" ;; esac
+if [ "$(cat "$AGYDIR/settings.json")" = '{}' ]; then ok "and leaves the CLI's settings file alone (an absent useG1Credits is off)"; else bad "and leaves the CLI's settings file alone" "$(cat "$AGYDIR/settings.json")"; fi
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW.rc" ] && break; sleep 0.5; done
 if [ -d "$GREPO/.claude/worktrees/$GW" ] && git -C "$GREPO" branch --list "$GW" | grep -q "$GW"; then ok "a worktree on a branch named after the worker was created under .claude/worktrees"
 else bad "a worktree on a branch named after the worker was created" "$(git -C "$GREPO" worktree list)"; fi
-assert_eq "$GREPO_P/.claude/worktrees/$GW" "$(cat "$GEMINI_CWD" 2>/dev/null)" "the CLI ran inside that worktree"
-GARGV=$(tr '\n' ' ' < "$GEMINI_ARGV" 2>/dev/null)
-case $GARGV in *"-p "*"commit it on this branch and stop there"*"Rules of engagement for auto on gemini-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
-  ok "the prompt carries the brief, the provider's Worker rules and the task, in that order" ;;
+assert_eq "$GREPO_P/.claude/worktrees/$GW" "$(cat "$AGY_CWD" 2>/dev/null)" "the CLI ran inside that worktree"
+GARGV=$(tr '\n' ' ' < "$AGY_ARGV" 2>/dev/null)
+case $GARGV in *"-p "*"Antigravity CLI headless inside a git worktree at $GREPO_P/.claude/worktrees/$GW "*"commit it on this branch and stop there"*"Rules of engagement for auto on antigravity-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
+  ok "the prompt carries the brief with the worktree's absolute path, the provider's Worker rules and the task, in that order" ;;
   *) bad "the prompt carries the brief, the Worker rules and the task" "$GARGV" ;; esac
-case $GARGV in *"-o json "*"--approval-mode yolo "*"--skip-trust"*) ok "headless flags: -o json, --approval-mode yolo, --skip-trust" ;; *) bad "headless flags" "$GARGV" ;; esac
-case $GARGV in *" -m "*) bad "model=auto passes no -m" "$GARGV" ;; *) ok "model=auto passes no -m (the CLI picks under a subscription login)" ;; esac
-if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$GEMINI_ENV" 2>/dev/null; then ok "the push guard reaches the CLI's git through GIT_CONFIG_*"; else bad "the push guard reaches the CLI's git"; fi
-GUARD=$(sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$GEMINI_ENV")
+case $GARGV in *"--output-format json "*"--dangerously-skip-permissions "*"--print-timeout 2h"*) ok "headless flags: --output-format json, --dangerously-skip-permissions, --print-timeout from the profile" ;; *) bad "headless flags" "$GARGV" ;; esac
+case $GARGV in *"--model"*) bad "model=auto passes no --model" "$GARGV" ;; *) ok "model=auto passes no --model (the CLI's default under a subscription login)" ;; esac
+if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$AGY_ENV" 2>/dev/null; then ok "the push guard reaches the CLI's git through GIT_CONFIG_*"; else bad "the push guard reaches the CLI's git"; fi
+GUARD=$(sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$AGY_ENV")
 if [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then ok "and the guard's pre-push refuses"; else bad "and the guard's pre-push refuses" "$GUARD"; fi
-case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=gemini-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
-case "$(gsc status)" in *"exited(0)  $GW  gemini-cli/auto"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
+case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=antigravity-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
+case "$(gsc status)" in *"exited(0)  $GW  antigravity-cli/auto"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
 COLL="$(gsc collect --worker "$GW")"
-case $COLL in *"stub work"*"10 model requests"*"in 132 (+22 cached), out 34"*"Added done.txt"*"today: 10 of 1500 requests on gemini-cli"*)
-  ok "collect shows the commit, sums requests and tokens across models (roles not double-counted), the response, and today's allowance" ;;
-  *) bad "collect shows the commit, requests, tokens and the response" "$COLL" ;; esac
+case $COLL in *"stub work"*"1 turn(s), status SUCCESS"*"in 13051 (+20 cached), out 59 (+58 thinking)"*"Added done.txt"*"today: 1 run(s) on antigravity-cli"*)
+  ok "collect shows the commit, the turn and token counts from the envelope, the response, and today's runs" ;;
+  *) bad "collect shows the commit, turns, tokens and the response" "$COLL" ;; esac
 COLL2="$(gsc collect --worker "$GW")"
-case $COLL2 in *"already collected once"*"today: 10 of 1500"*) ok "a second collect does not count the requests again" ;; *) bad "a second collect does not count again" "$COLL2" ;; esac
-case "$(gsc spend)" in *"gemini-cli: 10 of 1500 model requests today"*) ok "spend shows the day's requests for a requests-billed provider" ;; *) bad "spend shows the day's requests" "$(gsc spend)" ;; esac
+case $COLL2 in *"already collected once"*"today: 1 run(s)"*) ok "a second collect does not count the run again" ;; *) bad "a second collect does not count again" "$COLL2" ;; esac
+case "$(gsc spend)" in *"antigravity-cli: 1 run(s) today on the plan's quota"*) ok "spend shows the day's runs for a quota-billed provider" ;; *) bad "spend shows the day's runs" "$(gsc spend)" ;; esac
 gsc stop --worker "$GW" >/dev/null
 if [ ! -f "$SCHOME/.claude/sidecar-run/$GW.env" ] && [ ! -f "$SCHOME/.claude/sidecar-run/$GW.out" ]; then ok "stop removes the record and the CLI's output files"; else bad "stop removes the record"; fi
 if [ -d "$GREPO/.claude/worktrees/$GW" ]; then ok "and leaves the worktree with the work in it"; else bad "and leaves the worktree"; fi
 
 # A worker that is still running: status says live, stop kills it.
 # exported, not prefixed: a prefix assignment on a shell function does not reach the processes it spawns
-export GEMINI_STUB_SLEEP=60
+export AGY_STUB_SLEEP=60
 T_START=$(date +%s)
-OUT="$(gsc start --provider gemini-cli --task 'hang')"
-unset GEMINI_STUB_SLEEP
+OUT="$(gsc start --provider antigravity-cli --task 'hang')"
+unset AGY_STUB_SLEEP
 if [ $(( $(date +%s) - T_START )) -lt 5 ]; then ok "start returns at once while the worker runs on (descriptors detached)"
 else bad "start returns at once while the worker runs on" "took $(( $(date +%s) - T_START )) s"; fi
 GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
 sleep 0.5
-case "$(gsc status)" in *"live  $GW2  gemini-cli/auto"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep GEMINI_STUB "$GEMINI_ENV" 2>/dev/null || echo 'no GEMINI_STUB var') | argv: $(tr '\n' ' ' < "$GEMINI_ARGV" | cut -c1-80)" ;; esac
+case "$(gsc status)" in *"live  $GW2  antigravity-cli/auto"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
 case "$(gsc collect --worker "$GW2")" in *"still running (pid"*) ok "collect on a running worker says so and prices nothing" ;; *) bad "collect on a running worker says so" ;; esac
 GPID=$(sed -n 's/^pid=//p' "$SCHOME/.claude/sidecar-run/$GW2.env")
 gsc stop --worker "$GW2" >/dev/null; sleep 0.5
 if ! kill -0 "$GPID" 2>/dev/null; then ok "stop kills the running CLI worker"; else bad "stop kills the running CLI worker" "pid $GPID alive"; kill "$GPID" 2>/dev/null; fi
 case "$(gsc status)" in *"No workers."*) ok "and status is empty again" ;; *) bad "and status is empty again" "$(gsc status)" ;; esac
-rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests"
+
+# A run that hits the plan's quota marks the provider spent for 5 h: spend says so, start refuses, an old mark does not.
+export AGY_STUB_QUOTA=1
+OUT="$(gsc start --provider antigravity-cli --task 'x')"
+unset AGY_STUB_QUOTA
+GW3=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW3.rc" ] && break; sleep 0.5; done
+COLL3="$(gsc collect --worker "$GW3")"
+case $COLL3 in *"status ERROR"*"quota exhausted for this window"*"QUOTA SPENT: antigravity-cli is marked spent for 5 hours"*) ok "collect shows the CLI's error and marks a quota-out run" ;; *) bad "collect shows the CLI's error and marks a quota-out run" "$COLL3" ;; esac
+case "$(gsc spend)" in *"antigravity-cli: 2 run(s) today on the plan's quota"*"CAP REACHED (the plan's quota ran out at "*"; it refreshes within 5 h); start refuses"*) ok "spend marks a quota-billed provider whose last run hit the quota" ;; *) bad "spend marks a quota-billed provider whose last run hit the quota" "$(gsc spend)" ;; esac
+gsc stop --worker "$GW3" >/dev/null
+NWT=$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')
+case "$(gsc start --provider antigravity-cli --task x)" in *"antigravity-cli has reached its cap"*"refreshes within 5 h"*) ok "start refuses a quota-billed provider within 5 h of a quota-out run" ;; *) bad "start refuses a quota-billed provider within 5 h of a quota-out run" "$(gsc start --provider antigravity-cli --task x)" ;; esac
+assert_eq "$NWT" "$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')" "and makes no worktree"
+printf '%s antigravity-cli quota exhausted long ago\n' "$(( $(date +%s) - 20000 ))" > "$SCHOME/.claude/sidecar-quota"
+OUT="$(gsc start --provider antigravity-cli --task 'again')"
+case $OUT in *"Antigravity CLI, headless"*) ok "a quota mark older than 5 h no longer refuses" ;; *) bad "a quota mark older than 5 h no longer refuses" "$OUT" ;; esac
+GW4=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW4.rc" ] && break; sleep 0.5; done
+gsc stop --worker "$GW4" >/dev/null
+rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests" "$SCHOME/.claude/sidecar-quota"
 
 # ---------------------------------------------------------------------------
 group "Sidecar — three kinds of cost in spend, and the caps that stop a provider"
@@ -1660,13 +1690,15 @@ case "$(sc spend | head -1)" in
   *) bad "spend renders the 5h and 7d windows" "$(sc spend | head -1)" ;;
 esac
 SPEND="$(sc spend)"
-case $SPEND in *deepseek:*|*gemini-cli:*|*selfhosted:*) bad "a provider with no worker and no spend this period is not listed" "$SPEND" ;; *) ok "a provider with no worker and no spend this period is not listed" ;; esac
+case $SPEND in *deepseek:*|*antigravity-cli:*|*selfhosted:*) bad "a provider with no worker and no spend this period is not listed" "$SPEND" ;; *) ok "a provider with no worker and no spend this period is not listed" ;; esac
 printf '%s-12T10:00:00 deepseek deepseek-flash 1 2 3 1500000 s1\n' "$BM" > "$SCHOME/.claude/sidecar-ledger"
 case "$(sc spend)" in *"deepseek: API est \$1.50 / \$80 this month"*) ok "a token-billed provider with spend this month is listed with est / cap" ;; *) bad "a token-billed provider with spend this month is listed" "$(sc spend)" ;; esac
-printf '%s gemini-cli 12\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
-case "$(sc spend)" in *"gemini-cli: 12 of 1500 model requests today"*) ok "a requests-billed provider with requests today is listed" ;; *) bad "a requests-billed provider with requests today is listed" "$(sc spend)" ;; esac
-# selfhosted's profile lives in the ALT module copy (no balance_url, billing=none), so ask that copy
+# selfhosted's profile lives in the ALT module copy (no balance_url, billing=none), so ask that copy;
+# a requests-billed profile (no shipped provider bills that way since D18) lives there too
 alt() { ( cd "$SCHOME/repo" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$ALT/sidecar.sh" "$@" ) 2>&1; }
+printf 'base_url=https://example.invalid\ncred_var=ANTHROPIC_AUTH_TOKEN\ncred_key=DEEPSEEK_API_KEY\nmodel=m\nmodel_alias=sonnet\nbilling=requests\ndaily_requests=1500\n' > "$ALT/providers/reqprov.conf"
+printf '%s reqprov 12\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
+case "$(alt spend)" in *"reqprov: 12 of 1500 model requests today"*) ok "a requests-billed provider with requests today is listed" ;; *) bad "a requests-billed provider with requests today is listed" "$(alt spend)" ;; esac
 printf 'worker=w1\nprovider=selfhosted\nmodel=m\nsession=s\nrepo=%s\n' "$SCHOME/repo" > "$SCHOME/.claude/sidecar-run/w1.env"
 case "$(alt spend)" in *"selfhosted: in use, unmetered"*) ok "a provider with a worker out is listed even with nothing metered" ;; *) bad "a provider with a worker out is listed" "$(alt spend)" ;; esac
 rm -f "$SCHOME/.claude/sidecar-run/w1.env"
@@ -1679,12 +1711,12 @@ case "$(sc start --task x)" in *"deepseek has reached its cap"*"resets on the 1s
 if [ ! -f "$CLAUDE_ARGV" ]; then ok "and launches nothing"; else bad "and launches nothing"; fi
 rm -f "$SCHOME/.claude/sidecar-config"
 # Requests cap: today's count against daily_requests; start refuses; the worktree is never made.
-printf '%s gemini-cli 1500\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
-case "$(gsc spend)" in *"gemini-cli: 1500 of 1500 model requests today"*"CAP REACHED (1500 of 1500 model requests today; it resets at midnight); start refuses"*) ok "spend marks a requests-billed provider at its daily cap" ;; *) bad "spend marks a requests-billed provider at its daily cap" "$(gsc spend)" ;; esac
-NWT=$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')
-case "$(gsc start --provider gemini-cli --task x)" in *"gemini-cli has reached its cap"*"resets at midnight"*) ok "start refuses a requests-billed provider at its daily cap" ;; *) bad "start refuses a requests-billed provider at its cap" "$(gsc start --provider gemini-cli --task x)" ;; esac
-assert_eq "$NWT" "$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')" "and makes no worktree"
-rm -f "$SCHOME/.claude/sidecar-requests"
+printf '%s reqprov 1500\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
+case "$(alt spend)" in *"reqprov: 1500 of 1500 model requests today"*"CAP REACHED (1500 of 1500 model requests today; it resets at midnight); start refuses"*) ok "spend marks a requests-billed provider at its daily cap" ;; *) bad "spend marks a requests-billed provider at its daily cap" "$(alt spend)" ;; esac
+rm -f "$CLAUDE_ARGV"
+case "$(alt start --provider reqprov --task x)" in *"reqprov has reached its cap"*"resets at midnight"*) ok "start refuses a requests-billed provider at its daily cap" ;; *) bad "start refuses a requests-billed provider at its cap" "$(alt start --provider reqprov --task x)" ;; esac
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "and launches nothing"; else bad "and launches nothing"; fi
+rm -f "$SCHOME/.claude/sidecar-requests" "$ALT/providers/reqprov.conf"
 # Time cap: a time-billed provider (a Kaggle session) whose last reading says 0 minutes.
 cat > "$ALT/providers/timeprov.conf" <<'EOF'
 base_url=https://example.invalid

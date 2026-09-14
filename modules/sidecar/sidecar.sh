@@ -41,7 +41,7 @@ EXTRA="$HOME/.claude/statusline-extra"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$HOME/.claude/sidecar-config"
 # The monthly spend cap, in whole dollars, for token-billed providers. `start`
-# refuses a provider that has reached its cap (D17); requests-billed and
+# refuses a provider that has reached its cap (D17); requests-, quota- and
 # time-billed providers have their own caps in their profiles. Read from CONFIG
 # so it is not baked into the script.
 CAP_USD=80
@@ -88,46 +88,43 @@ _rules_section() {
   eval "$1=\$__body"
 }
 
-# _gemini_stats REQ_VAR PROMPT_VAR OUT_VAR CACHED_VAR FILE — sums from the JSON
-# `gemini -o json` prints: `stats.models.<model>.api.totalRequests` and the
-# model's `tokens`. Roles nest inside each model with their own totalRequests
-# (a breakdown of the same calls), so only the first counts after each `"api":{`
-# are taken — anything else double-counts. No JSON runtime is a dependency here.
-_gemini_stats() {
-  local __f=$5 __txt __chunk __n __req=0 __pr=0 __out=0 __ca=0 __first=1
+# _agy_stats TURNS_VAR IN_VAR OUT_VAR CACHED_VAR THINK_VAR FILE — counts from
+# the one JSON envelope `agy -p … --output-format json` prints on exit:
+# `num_turns` and `usage.{input_tokens,output_tokens,cache_read_tokens,
+# thinking_tokens}`. No JSON runtime is a dependency here.
+_agy_stats() {
+  local __f=$6 __txt __n __turns __in __out __ca __th
   [ -f "$__f" ] || return 1
   __txt=$(tr -d ' \n\r\t' < "$__f")
-  case $__txt in *'"api":{'*) ;; *) return 1 ;; esac
-  while [ -n "$__txt" ]; do
-    __chunk=${__txt%%\"api\":\{*}
-    if [ "$__first" = 1 ]; then __first=0
-    else
-      __n=${__chunk#*\"totalRequests\":}; __n=${__n%%[!0-9]*}; __req=$((__req + ${__n:-0}))
-      __n=${__chunk#*\"prompt\":}; __n=${__n%%[!0-9]*}; __pr=$((__pr + ${__n:-0}))
-      __n=${__chunk#*\"candidates\":}; __n=${__n%%[!0-9]*}; __out=$((__out + ${__n:-0}))
-      __n=${__chunk#*\"cached\":}; __n=${__n%%[!0-9]*}; __ca=$((__ca + ${__n:-0}))
-    fi
-    [ "$__chunk" = "$__txt" ] && break
-    __txt=${__txt#*\"api\":\{}
-  done
-  eval "$1=\$__req; $2=\$__pr; $3=\$__out; $4=\$__ca"
+  case $__txt in *'"usage":{'*) ;; *) return 1 ;; esac
+  __n=${__txt#*\"num_turns\":}; __turns=${__n%%[!0-9]*}
+  __n=${__txt#*\"input_tokens\":}; __in=${__n%%[!0-9]*}
+  __n=${__txt#*\"output_tokens\":}; __out=${__n%%[!0-9]*}
+  __n=${__txt#*\"cache_read_tokens\":}; __ca=${__n%%[!0-9]*}
+  __n=${__txt#*\"thinking_tokens\":}; __th=${__n%%[!0-9]*}
+  eval "$1=\${__turns:-0}; $2=\${__in:-0}; $3=\${__out:-0}; $4=\${__ca:-0}; $5=\${__th:-0}"
 }
 
-# _gemini_response VARNAME FILE — the `response` string of that JSON, first
-# line-ish, for the collect summary. Escapes are left as printed.
-_gemini_response() {
-  local __f=$2 __txt
+# _agy_field VARNAME FILE KEY — a top-level string field of that envelope
+# (`status`, `response`, `error`). Escapes are left as printed; a quote inside
+# a JSON string is always escaped, so cutting at the first `","` is safe.
+_agy_field() {
+  local __f=$2 __key=$3 __txt
   [ -f "$__f" ] || return 1
   __txt=$(tr -d '\n\r' < "$__f")
-  case $__txt in *'"response":"'*) ;; *) return 1 ;; esac
-  __txt=${__txt#*\"response\":\"}
-  __txt=${__txt%%\",\"stats\"*}
+  case $__txt in *"\"$__key\":\""*) ;; *) return 1 ;; esac
+  __txt=${__txt#*\"$__key\":\"}
+  __txt=${__txt%%\",\"*}
   eval "$1=\$__txt"
 }
 
-# Requests spent today on a requests-billed provider (Gemini CLI: 1,500 a day on
-# the plan). One line per collect: DATE PROVIDER N. Money is not the unit here.
+# Runs collected today on a provider whose unit is not money (one line per
+# collect: DATE PROVIDER N), and the moment a quota-billed provider last ran
+# out (EPOCH PROVIDER MESSAGE) — the plan's quota is not readable headless, so
+# a run that ends in a quota error is what marks it spent, for 5 hours.
 REQUESTS="$HOME/.claude/sidecar-requests"
+QUOTA="$HOME/.claude/sidecar-quota"
+QUOTA_HOLD_S=18000
 _requests_today() {
   local __v=$1 __prov=$2 __today __line __sum=0
   __today=$(date +%Y-%m-%d)
@@ -459,6 +456,19 @@ _latest_reading() {
   eval "$1=\$__last"
 }
 
+# _quota_spent_at VARNAME PROVIDER — epoch of the newest quota-out mark, or 1.
+_quota_spent_at() {
+  local __qts __qprov __qrest __qlast=''
+  [ -f "$QUOTA" ] || return 1
+  while read -r __qts __qprov __qrest; do
+    [ "$__qprov" = "$2" ] || continue
+    case $__qts in ''|*[!0-9]*) continue ;; esac
+    __qlast=$__qts
+  done < "$QUOTA"
+  [ -n "$__qlast" ] || return 1
+  eval "$1=\$__qlast"
+}
+
 # Callers below pass names no helper declares as a local (__spent, __left, __bill):
 # _month_to_date and _latest_reading have their own __micro and __bal, and an
 # eval into a colliding name assigns the helper's local, not the caller's.
@@ -466,7 +476,7 @@ _latest_reading() {
 # in the current period. Others are not shown: a line for every profile would
 # bury the ones that matter.
 _provider_in_use() {
-  local __f __l __spent __req __today
+  local __f __l __spent __req __today __q
   for __f in "$RUN"/*.env; do
     [ -f "$__f" ] || continue
     while IFS= read -r __l || [ -n "$__l" ]; do
@@ -475,6 +485,7 @@ _provider_in_use() {
   done
   _month_to_date __spent "$1"; [ "$__spent" -gt 0 ] && return 0
   _requests_today __req "$1"; [ "$__req" -gt 0 ] && return 0
+  _quota_spent_at __q "$1" && [ $(( $(date +%s) - __q )) -lt "$QUOTA_HOLD_S" ] && return 0
   __today=$(date +%Y-%m-%d)
   [ -f "$BALANCE" ] && grep -q "^$__today[^ ]* $1 " "$BALANCE" 2>/dev/null && return 0
   return 1
@@ -482,8 +493,9 @@ _provider_in_use() {
 
 # _cap_reached VARNAME PROVIDER — 0 with the reason when the provider's cap is
 # reached: money (CAP_USD, the higher of the estimate and the billed figure),
-# requests (daily_requests), or time (a balance reading of the session's
-# minutes at 0, taken fresh). `start` refuses on it; `spend` says so.
+# requests (daily_requests), quota (a run hit the plan's quota within the last
+# 5 h), or time (a balance reading of the session's minutes at 0, taken
+# fresh). `start` refuses on it; `spend` says so.
 _cap_reached() {
   local __prof="$SELF_DIR/providers/$2.conf" __billing=tokens __spent __bill __usd_out __daily __req __left
   _conf __billing "$__prof" billing || __billing=tokens
@@ -498,6 +510,12 @@ _cap_reached() {
       _conf __daily "$__prof" daily_requests || return 1
       _requests_today __req "$2"
       if [ "$__req" -ge "$__daily" ]; then eval "$1=\"$__req of $__daily model requests today; it resets at midnight\""; return 0; fi ;;
+    quota)
+      _quota_spent_at __left "$2" || return 1
+      if [ $(( $(date +%s) - __left )) -lt "$QUOTA_HOLD_S" ]; then
+        __req=$(date -r "$__left" +%H:%M 2>/dev/null || date -d "@$__left" +%H:%M 2>/dev/null)
+        eval "$1=\"the plan's quota ran out at $__req; it refreshes within 5 h\""; return 0
+      fi ;;
     *)
       _conf __usd_out "$__prof" balance_url || return 1
       _sample_balance "$2" 2>/dev/null
@@ -521,6 +539,9 @@ _provider_line() {
       _conf __daily "$__prof" daily_requests || __daily='?'
       _requests_today __req "$2"
       __out="$2: $__req of $__daily model requests today (the plan's allowance, not money)" ;;
+    quota)
+      _requests_today __req "$2"
+      __out="$2: $__req run(s) today on the plan's quota (refreshed every 5 h up to a weekly cap; not readable headless, the CLI refuses when it is spent)" ;;
     *)
       if _latest_reading __left "$2"; then
         __out="$2: $((__left / 1000000)) min of session time left at the last reading"
@@ -607,8 +628,8 @@ cmd_start() {
   _conf harness "$profile" harness || harness=claude
   case $harness in
     claude) ;;
-    gemini-cli) _start_gemini "$profile"; return ;;
-    *) die "$profile: harness=$harness is not one this sidecar can launch (claude, gemini-cli)." ;;
+    antigravity-cli) _start_agy "$profile"; return ;;
+    *) die "$profile: harness=$harness is not one this sidecar can launch (claude, antigravity-cli)." ;;
   esac
 
   local base cred_var cred_key model alias key
@@ -791,17 +812,27 @@ $worker_rules"
   echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
 }
 
-# The Gemini CLI as the worker (D16). The CLI runs the task headless in a
-# worktree of its own and exits; there is no session to attach to, no peer
-# messaging, and no credential of ours — the login is the user's Google account
-# in ~/.gemini/oauth_creds.json, made once by an interactive `gemini`. Google
-# forbids using that login from any other software, so the official CLI it is.
-_start_gemini() {
-  local profile=$1 model='' daily=''
+# The Antigravity CLI as the worker (D18, superseding D16's Gemini CLI: Google
+# stopped serving personal accounts there on 2026-06-18). `agy` runs the task
+# headless in a worktree of its own and exits; there is no session to attach
+# to, no peer messaging, and no credential of ours — the login is the user's
+# Google account, kept by the CLI itself. Google forbids using that login from
+# any other software, so the official CLI it is.
+AGY_TOKEN="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+AGY_SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
+_start_agy() {
+  local profile=$1 model='' timeout=''
   _conf model "$profile" model || model=auto
-  _conf daily "$profile" daily_requests || daily=''
-  command -v gemini >/dev/null 2>&1 || die "gemini is not installed. npm i -g @google/gemini-cli, then run \`gemini\` once to sign in."
-  [ -f "$HOME/.gemini/oauth_creds.json" ] || die "not signed in to Gemini CLI: $HOME/.gemini/oauth_creds.json is missing. Run \`gemini\` once interactively and choose Login with Google; the worker cannot sign in for you."
+  _conf timeout "$profile" print_timeout || timeout=2h
+  command -v agy >/dev/null 2>&1 || die "agy is not installed: curl -fsSL https://antigravity.google/cli/install.sh | bash, then run \`agy\` once to sign in."
+  [ -f "$AGY_TOKEN" ] || die "not signed in to Antigravity CLI: $AGY_TOKEN is missing. Run \`agy\` once and sign in with Google; the worker cannot sign in for you."
+  # The plan's quota is free; purchased AI credits are money. The CLI spends
+  # them only when `useG1Credits` is switched on (opt-in; the CLI rewrites its
+  # settings file on every start and drops the default, so an absent key is
+  # off). Nothing launches while it is on.
+  if [ -f "$AGY_SETTINGS" ] && tr -d ' \n\r\t' < "$AGY_SETTINGS" | grep -q '"useG1Credits":true'; then
+    die "$AGY_SETTINGS has useG1Credits=true: the CLI would spend purchased AI credits (money) once the plan's quota is gone. Switch it off first."
+  fi
   _no_worker_out
   git rev-parse --git-dir >/dev/null 2>&1 || die "not in a git repository. The worker hands work back as a branch."
   local repo worker wt
@@ -821,10 +852,12 @@ _start_gemini() {
   git worktree add -q -b "$worker" "$wt" >/dev/null 2>&1 || die "git worktree add failed for $wt (is the branch name $worker free?)"
   local guard
   _make_guard guard "$worker"
-  # The brief rides at the top of the prompt. GEMINI.md would be the CLI's
-  # standing-instruction file, but writing one into the worktree shows up in
-  # the diff and clobbers a repository's own GEMINI.md; the prompt does not.
-  local brief="You are Gemini, running the official Gemini CLI headless inside a git worktree on the branch $worker. Your work will be reviewed as a branch by the session that dispatched you, so commit it on this branch and stop there. Do not push, do not merge into any other branch, do not switch branches. If you cannot finish, commit what you have and say what is left. Your final answer is the report the reviewer reads: what changed, what you ran and its result, what is left."
+  # The brief rides at the top of the prompt. A standing-instruction file
+  # (GEMINI.md / AGENTS.md) written into the worktree would show up in the diff
+  # and clobber a repository's own; the prompt does not.
+  # The worktree's absolute path is spelled out: the first live run searched the
+  # whole home directory for a file that was two levels below its own cwd.
+  local brief="You are running the official Antigravity CLI headless inside a git worktree at $wt (your working directory, on the branch $worker). Every file the task names is inside that directory; do not search or edit outside it. Your work will be reviewed as a branch by the session that dispatched you, so commit it on this branch and stop there. Do not push, do not merge into any other branch, do not switch branches. If you cannot finish, commit what you have and say what is left. Your final answer is the report the reviewer reads: what changed, what you ran and its result, what is left."
   local worker_rules
   if _rules_section worker_rules "$SELF_DIR/providers/$PROVIDER.rules.md" Worker; then
     brief="$brief
@@ -837,18 +870,18 @@ $worker_rules"
 TASK:
 $TASK"
   local -a margs=()
-  [ "$model" != auto ] && margs=(-m "$model")
-  # --skip-trust: a fresh worktree is an untrusted folder and headless mode
-  # would otherwise stop on the trust question. yolo: nobody is there to
-  # approve tools. The exit code lands in .rc for status; stdout is the one
-  # JSON object the CLI prints when done.
+  [ "$model" != auto ] && margs=(--model "$model")
+  # --dangerously-skip-permissions: nobody is there to approve tools (the
+  # CLI auto-denies what it cannot ask about). --print-timeout: the CLI's
+  # default is 5 minutes, which no coding task fits. The exit code lands in
+  # .rc for status; stdout is the one JSON envelope the CLI prints when done.
   # The wrapper's own descriptors are detached too: a background subshell that
   # inherits the caller's stdout keeps a `$(sidecar.sh start …)` waiting until
   # the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
   # launching from a tool call would have hung with it.
   (
     cd "$wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
-      gemini -p "$prompt" -o json --approval-mode yolo --skip-trust ${margs[@]+"${margs[@]}"} \
+      agy -p "$prompt" --output-format json --dangerously-skip-permissions --print-timeout "$timeout" ${margs[@]+"${margs[@]}"} \
         < /dev/null > "$RUN/$worker.out" 2> "$RUN/$worker.err"
     echo $? > "$RUN/$worker.rc"
   ) < /dev/null > /dev/null 2>&1 &
@@ -858,14 +891,14 @@ $TASK"
     echo "worker=$worker"
     echo "provider=$PROVIDER"
     echo "model=$model"
-    echo "harness=gemini-cli"
+    echo "harness=antigravity-cli"
     echo "pid=$pid"
     echo "worktree=$wt"
     echo "repo=$repo"
     echo "started=$(date +%s)"
   } > "$RUN/$worker.env"
-  echo "worker $worker · $PROVIDER/$model (Gemini CLI, headless) · $wt"
-  [ -n "$daily" ] && echo "  budget:  $daily model requests a day on the plan; \"$SELF_DIR/sidecar.sh\" spend shows today's"
+  echo "worker $worker · $PROVIDER/$model (Antigravity CLI, headless) · $wt"
+  echo "  budget:  the plan's quota (refreshed every 5 h up to a weekly cap, not readable headless); a run that hits it marks $PROVIDER spent for 5 h"
   echo "  watch:   tail -f \"$RUN/$worker.err\"   (the JSON result arrives in $RUN/$worker.out when it exits)"
   echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $worker"
 }
@@ -930,8 +963,8 @@ cmd_collect() {
   [ "$found" = 1 ] || echo "(no worktree yet — the worker may still be starting)"
 
   echo
-  if [ "$harness" = gemini-cli ]; then
-    _collect_gemini "$provider" "$model" "$pid"
+  if [ "$harness" = antigravity-cli ]; then
+    _collect_agy "$provider" "$model" "$pid"
     return
   fi
   # And one after, which is what makes a difference computable at all.
@@ -1009,35 +1042,47 @@ cmd_collect() {
   fi
 }
 
-# What a Gemini CLI worker cost: model requests against the plan's daily
-# allowance, from the JSON the CLI printed on exit. Nothing is priced in money.
-_collect_gemini() {
-  local provider=$1 model=$2 pid=$3 out="$RUN/$WORKER.out" req pr ca outt daily='' today resp
+# What an Antigravity CLI worker cost: turns and tokens from the envelope the
+# CLI printed on exit. Nothing is priced in money — the plan's quota is the
+# unit, and a run that ends in a quota error marks the provider spent (QUOTA).
+_collect_agy() {
+  local provider=$1 model=$2 pid=$3 out="$RUN/$WORKER.out" turns inn outt ca th st='' err='' resp='' today
   echo "== what it cost =="
   if kill -0 "$pid" 2>/dev/null; then
-    echo "still running (pid $pid); the CLI prints its result and stats when it exits."
+    echo "still running (pid $pid); the CLI prints its result and usage when it exits."
     return 0
   fi
-  if ! _gemini_stats req pr outt ca "$out"; then
-    echo "no stats yet: $out holds no JSON result. Exit code: $(cat "$RUN/$WORKER.rc" 2>/dev/null || echo unknown); stderr tail:"
+  if ! _agy_stats turns inn outt ca th "$out"; then
+    echo "no usage yet: $out holds no JSON result. Exit code: $(cat "$RUN/$WORKER.rc" 2>/dev/null || echo unknown); stderr tail:"
     tail -n 5 "$RUN/$WORKER.err" 2>/dev/null | sed 's/^/  /'
     return 1
   fi
-  _conf daily "$SELF_DIR/providers/$provider.conf" daily_requests || daily=''
-  echo "$provider/$model · $req model requests · no per-token cost ($provider bills as requests)"
-  echo "  Tokens are still counted: in $pr (+$ca cached), out $outt."
-  if _gemini_response resp "$out"; then
+  _agy_field st "$out" status || st='?'
+  echo "$provider/$model · $turns turn(s), status $st · no per-token cost ($provider bills as the plan's quota)"
+  echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)."
+  if [ "$st" != SUCCESS ]; then
+    _agy_field err "$out" error || err=''
+    echo "== the CLI reported an error =="
+    printf '%s\n' "${err:-(no message)}"
+  fi
+  if _agy_field resp "$out" response && [ -n "$resp" ]; then
     echo "== what it said =="
-    printf '%s\n' "${resp:0:1200}"
+    resp=${resp//\\\"/\"}
+    printf '%b\n' "${resp:0:1200}"     # %b: the envelope's \n and \t come out as line breaks and tabs
   fi
   if [ -f "$RUN/$WORKER.collected" ]; then
-    echo "(already collected once — not added to the count again)"
+    echo "(already collected once — not counted again)"
   else
-    printf '%s %s %s\n' "$(date +%Y-%m-%d)" "$provider" "$req" >> "$REQUESTS"
+    printf '%s %s 1\n' "$(date +%Y-%m-%d)" "$provider" >> "$REQUESTS"
+    case $(printf '%s' "$err" | tr '[:upper:]' '[:lower:]') in
+      *quota*|*rate*limit*|*resource_exhausted*|*credits*|*"too many requests"*)
+        printf '%s %s %s\n' "$(date +%s)" "$provider" "$(printf '%s' "$err" | tr -d '\n' | cut -c1-120)" >> "$QUOTA"
+        echo "QUOTA SPENT: $provider is marked spent for 5 hours; start refuses until then." ;;
+    esac
     : > "$RUN/$WORKER.collected"
   fi
   _requests_today today "$provider"
-  [ -n "$daily" ] && echo "today: $today of $daily requests on $provider"
+  echo "today: $today run(s) on $provider"
   return 0
 }
 
@@ -1051,7 +1096,7 @@ cmd_stop() {
   done < "$f"
   [ -n "$session" ] && claude stop "${session%%-*}" 2>&1 | head -1
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    pkill -P "$pid" 2>/dev/null   # the gemini process under the launching subshell
+    pkill -P "$pid" 2>/dev/null   # the agy process under the launching subshell
     kill "$pid" 2>/dev/null
     echo "killed pid $pid"
   fi

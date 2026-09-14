@@ -668,7 +668,7 @@ change per session (a Kaggle kernel's decode rate and context) write their own
 `NAME.rules.md` from their launcher at READY — the Anthropic Sidecar project
 does that — and this module reads whatever is there.
 
-## 13. A second worker shape: the Gemini CLI — 2026-09-14
+## 13. A second worker shape: the Gemini CLI — 2026-09-14 (superseded by §15: the CLI stopped serving personal accounts)
 
 The user's Google AI Pro plan gives Gemini CLI 1,500 model requests a day and funds no
 API key; Google names using the CLI's OAuth from any other software as a terms
@@ -716,3 +716,46 @@ higher of estimate and billed), a requests-billed one at `daily_requests`, a tim
 one whose fresh session reading is 0 minutes. `start` refuses with the reason and when it
 resets; `spend` marks the line "CAP REACHED … start refuses". The status line still turns
 red at the money cap. This supersedes the "advisory by decision" stance the cap had.
+
+## 15. The Antigravity CLI replaces the Gemini CLI as the worker — 2026-09-14
+
+§13 was built against a stub and never ran live: the first real call after a successful
+Google login on Gemini CLI 0.59.0 answered `IneligibleTierError: This client is no longer
+supported for Gemini Code Assist for individuals`. Google stopped serving free, AI Pro
+and AI Ultra accounts on Gemini CLI and the Code Assist extensions on 2026-06-18; the
+plan's replacement is the closed-source Antigravity CLI (`agy`, Go). It keeps the shape
+§13 wanted — one headless run per task, one JSON envelope on exit — so the harness
+changed, not the contract:
+
+- `providers/antigravity-cli.conf`: `harness=antigravity-cli`, `billing=quota`,
+  `print_timeout=2h`, `model=auto` (or a slug from `agy models`, passed as `--model`).
+- `start` runs `agy -p "<brief + Worker rules + task>" --output-format json
+  --dangerously-skip-permissions --print-timeout 2h` in the sidecar-made worktree;
+  status, stop and the push guard are unchanged. The login is the CLI's own
+  (`~/.gemini/antigravity-cli/antigravity-oauth-token`); `start` refuses without it.
+- Money guard: the CLI can fall back to purchased AI credits when the plan's quota is
+  gone (`useG1Credits`, opt-in, in `~/.gemini/antigravity-cli/settings.json`; the CLI
+  rewrites that file on every start and drops defaults, so an absent key is off — a
+  first version wrote `false` into it and refused a silent file, and the CLI erased it
+  within the same run). `start` refuses while the file says `true`. The CLI also
+  inherits the setting from the Antigravity desktop app's user settings (its log says
+  "inherited useG1Credits=true from …"); keep it off there too.
+- `collect` reads the envelope (`status`, `response`, `error`, `num_turns`,
+  `usage.{input,output,thinking,cache_read}_tokens`), counts one run per collect in
+  `sidecar-requests`, and — because the plan's quota (refreshed every 5 h up to a weekly
+  cap, no numbers published, readable only in the interactive `/usage`) cannot be
+  polled — treats a run whose `error` names a quota, rate limit or credits as the cap:
+  `sidecar-quota` gets `EPOCH PROVIDER MESSAGE`, `spend` shows CAP REACHED and `start`
+  refuses for 5 h from that moment.
+- Signing in on an unattended machine: `modules/sidecar/antigravity-login.py DIR`
+  runs `agy` under a pty that looks like an SSH session, so it prints the sign-in URL
+  instead of opening a browser; the URL goes to the user's phone through the chat and
+  the CLI's own 60-second window (hardcoded) is enough when the URL is posted the moment
+  it appears. Done live 2026-09-14 on the second attempt; the Gemini CLI's 5-minute
+  variant of the same relay is what timed out first.
+
+Rejected: the `gemini` provider mode of `agy` (a Gemini API key: paid, not the plan);
+any proxy of the CLI's login (terms). Verified with a stub `agy` in `tests/run-tests.sh`
+and live: two real `agy -p` calls (`status SUCCESS`, 13k input tokens of the CLI's own
+system prompt per call) after the relay login.
+

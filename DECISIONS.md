@@ -670,7 +670,7 @@ rules file and rewrite it at READY.
 
 ## D16 — The Gemini CLI is a worker shape of its own, launched headless in a sidecar-made worktree
 
-**Date** 2026-09-14 · **Status** accepted (built against a stub; live run pending the user's login)
+**Date** 2026-09-14 · **Status** superseded by D18 the same day (Gemini CLI no longer serves personal accounts)
 
 **Context.** The user's Google AI Pro plan grants Gemini CLI 1,500 model requests a day
 and no API key. Google's terms forbid using the CLI's OAuth from other software and
@@ -710,3 +710,30 @@ of a Claude Code or Gemini CLI worker — the cap holds at the next `start`).
 
 **Consequences.** A worker already out finishes past the cap. Time caps rely on the
 provider's own reading (the Kaggle kernel stops itself at its cap anyway).
+
+## D18 — The Antigravity CLI replaces the Gemini CLI as the plan-funded worker; a quota-out run is the cap
+
+**Date** 2026-09-14 · **Status** accepted · supersedes D16
+
+**Context.** D16's live run failed on its first call: Google retired Gemini CLI for
+free, AI Pro and AI Ultra accounts on 2026-06-18 (`IneligibleTierError`, "migrate to
+Antigravity"). The plan now funds Antigravity CLI (`agy`), closed source, with a
+headless mode of the same shape, a quota refreshed every 5 h up to a weekly cap that
+no command reports headless, and an optional fallback to purchased AI credits.
+
+**Decision.** `harness=antigravity-cli` with `billing=quota` replaces `gemini-cli`.
+`start` runs `agy -p … --output-format json --dangerously-skip-permissions
+--print-timeout 2h` in the sidecar's worktree, refuses without the CLI's token file,
+and refuses while the CLI's settings say `useG1Credits: true` (the credits fallback is
+opt-in; the CLI rewrites its settings file and drops the default, so absent means off). `collect` reads the envelope; a run whose error names the quota marks
+the provider spent for 5 h (`sidecar-quota`), which `spend` shows and `start` obeys.
+A pty relay (`antigravity-login.py`) makes the CLI's sign-in possible from a phone.
+
+**Rejected.** Keeping D16 alive for Code Assist Standard/Enterprise seats (the user has
+none); polling the quota through the interactive `/usage` under a pty (fragile, and the
+CLI already refuses a spent quota itself); `agy`'s Gemini-API-key mode (money, not the
+plan); a fixed daily request cap (the plan's unit is not requests).
+
+**Consequences.** The Gemini CLI profile, rules and tests are gone; `sidecar-requests`
+now counts runs for this provider, not model calls; the cap is reactive (one run hits
+the wall before the sidecar knows), which is the best available without a quota API.

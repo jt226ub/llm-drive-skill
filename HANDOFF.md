@@ -37,7 +37,28 @@ pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live s
 argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
 Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
 
-## Gemini CLI as a second worker shape — built 2026-09-14 against a stub; live run needs the user's login
+## The plan-funded worker is the Antigravity CLI — live 2026-09-14 (D18, supersedes the Gemini CLI section below)
+
+Gemini CLI's Google login succeeded on the second phone relay, then every call answered
+`IneligibleTierError`: Google stopped serving personal accounts there on 2026-06-18. The replacement,
+Antigravity CLI (`agy` 1.2.2, `~/.local/bin/agy`; its installer added a PATH line to `~/.zshrc` and
+`~/.profile`), is signed in on the Mac (`~/.gemini/antigravity-cli/antigravity-oauth-token`, via
+`modules/sidecar/antigravity-login.py` and the phone, inside the CLI's 60-second window) and two headless
+calls returned `status SUCCESS`. `providers/antigravity-cli.conf` (`harness=antigravity-cli`,
+`billing=quota`, `print_timeout=2h`) and its rules replace the gemini-cli files; `start` refuses while the
+CLI's `settings.json` says `useG1Credits: true` (purchased credits are money; the fallback is opt-in), `collect` reads the JSON
+envelope, and a run that ends in a quota error marks the provider spent for 5 h (`~/.claude/sidecar-quota`).
+Verified with a stub `agy` in `tests/run-tests.sh` and live the same afternoon: a real worker on a scratch
+repo (`start --provider antigravity-cli --task "add reverse_words … run the tests … commit"`) edited two files,
+ran the tests, committed `a283930 add reverse_words` with no attribution and reported in the envelope's
+`response` — 360 s, 124,852 input tokens (97,296 of them cache reads), 4,366 output, 2,311 thinking, one
+turn; `collect` priced it as one run, `stop` cleaned up. Lesson from the first attempt: the CLI's agent
+searched the whole home directory for a file two levels below its cwd and sat there for 10 minutes, so the
+brief now spells out the worktree's absolute path and says every file is inside it. Also learned: the CLI
+rewrites its `settings.json` on start and drops defaults, so the credits guard refuses only an explicit
+`useG1Credits: true`.
+
+## Gemini CLI as a second worker shape — built 2026-09-14 against a stub; superseded the same day, see above
 
 D16, `modules/sidecar/DESIGN.md` §13. `providers/gemini-cli.conf` (`harness=gemini-cli`, `billing=requests`,
 `daily_requests=1500`) and its rules file are shipped and installed; `gemini` 0.59.0 is installed on the Mac
