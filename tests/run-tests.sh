@@ -1615,16 +1615,16 @@ if [ -d "$GREPO/.claude/worktrees/$GW" ] && git -C "$GREPO" branch --list "$GW" 
 else bad "a worktree on a branch named after the worker was created" "$(git -C "$GREPO" worktree list)"; fi
 assert_eq "$GREPO_P/.claude/worktrees/$GW" "$(cat "$AGY_CWD" 2>/dev/null)" "the CLI ran inside that worktree"
 GARGV=$(tr '\n' ' ' < "$AGY_ARGV" 2>/dev/null)
-case $GARGV in *"-p "*"Antigravity CLI headless inside a git worktree at $GREPO_P/.claude/worktrees/$GW "*"commit it on this branch and stop there"*"Rules of engagement for auto on antigravity-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
+case $GARGV in *"-p "*"Antigravity CLI headless inside a git worktree at $GREPO_P/.claude/worktrees/$GW "*"commit it on this branch and stop there"*"Rules of engagement for gemini-3.8-flash-high on antigravity-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
   ok "the prompt carries the brief with the worktree's absolute path, the provider's Worker rules and the task, in that order" ;;
   *) bad "the prompt carries the brief, the Worker rules and the task" "$GARGV" ;; esac
 case $GARGV in *"--output-format json "*"--dangerously-skip-permissions "*"--print-timeout 2h"*) ok "headless flags: --output-format json, --dangerously-skip-permissions, --print-timeout from the profile" ;; *) bad "headless flags" "$GARGV" ;; esac
-case $GARGV in *"--model"*) bad "model=auto passes no --model" "$GARGV" ;; *) ok "model=auto passes no --model (the CLI's default under a subscription login)" ;; esac
+case $GARGV in *"--model gemini-3.8-flash-high"*) ok "the profile's model reaches the CLI as --model" ;; *) bad "the profile's model reaches the CLI as --model" "$GARGV" ;; esac
 if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$AGY_ENV" 2>/dev/null; then ok "the push guard reaches the CLI's git through GIT_CONFIG_*"; else bad "the push guard reaches the CLI's git"; fi
 GUARD=$(sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$AGY_ENV")
 if [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then ok "and the guard's pre-push refuses"; else bad "and the guard's pre-push refuses" "$GUARD"; fi
 case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=antigravity-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
-case "$(gsc status)" in *"exited(0)  $GW  antigravity-cli/auto"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
+case "$(gsc status)" in *"exited(0)  $GW  antigravity-cli/gemini-3.8-flash-high"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
 COLL="$(gsc collect --worker "$GW")"
 case $COLL in *"stub work"*"1 turn(s), status SUCCESS"*"in 13051 (+20 cached), out 59 (+58 thinking)"*"Added done.txt"*"today: 1 run(s) on antigravity-cli"*)
   ok "collect shows the commit, the turn and token counts from the envelope, the response, and today's runs" ;;
@@ -1646,7 +1646,7 @@ if [ $(( $(date +%s) - T_START )) -lt 5 ]; then ok "start returns at once while 
 else bad "start returns at once while the worker runs on" "took $(( $(date +%s) - T_START )) s"; fi
 GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
 sleep 0.5
-case "$(gsc status)" in *"live  $GW2  antigravity-cli/auto"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
+case "$(gsc status)" in *"live  $GW2  antigravity-cli/gemini-3.8-flash-high"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
 case "$(gsc collect --worker "$GW2")" in *"still running (pid"*) ok "collect on a running worker says so and prices nothing" ;; *) bad "collect on a running worker says so" ;; esac
 GPID=$(sed -n 's/^pid=//p' "$SCHOME/.claude/sidecar-run/$GW2.env")
 gsc stop --worker "$GW2" >/dev/null; sleep 0.5

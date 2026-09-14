@@ -728,7 +728,8 @@ plan's replacement is the closed-source Antigravity CLI (`agy`, Go). It keeps th
 changed, not the contract:
 
 - `providers/antigravity-cli.conf`: `harness=antigravity-cli`, `billing=quota`,
-  `print_timeout=2h`, `model=auto` (or a slug from `agy models`, passed as `--model`).
+  `print_timeout=2h`, `model=gemini-3.8-flash-high` (a slug from `agy models`, passed as
+  `--model`; the user wants the newest Flash, and `auto` leaves a choice the CLI records nowhere).
 - `start` runs `agy -p "<brief + Worker rules + task>" --output-format json
   --dangerously-skip-permissions --print-timeout 2h` in the sidecar-made worktree;
   status, stop and the push guard are unchanged. The login is the CLI's own

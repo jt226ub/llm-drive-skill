@@ -16,7 +16,8 @@ front of the task the CLI receives. The rest of this file is documentation.
 - Every model call draws on the same quota; a tool loop makes many. Batch small
   tasks into one well-specified brief, and prefer it for mechanical work before
   any paid provider.
-- The default model is the CLI's choice; `agy models` lists slugs for the profile.
+- The profile pins the newest Flash (gemini-3.8-flash-high); `agy models` lists the
+  other slugs, and `-medium` / `-low` spend less quota on the same model.
 
 ## Worker
 
