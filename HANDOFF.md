@@ -37,6 +37,17 @@ pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live s
 argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
 Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
 
+## The roster: four models with the user's roles, `start --model`, and a roster line per prompt — 2026-09-14 (D19)
+
+The user set the roles (DESIGN §16): Gemini 3.8 Flash = fast non-interactive coder; Gemini 3.1 Pro = slower
+non-interactive coding expert for planning, review and brainstorming; Qwen3.8-27B on the TPU = fast interactive
+coder, booted and queued once then used for the session, budget is time not tokens; DeepSeek V4.1 Flash = fast
+interactive expert coder, paid, used sparingly. `start --model SLUG` picks among the antigravity-cli profile's
+`models=` (three Flash efforts, two Pro efforts); every profile carries `roster=` and the sidecar-mode hook lists
+the other providers' roster lines after the active provider's rules. The Kaggle TPU launcher (Anthropic Sidecar
+project) writes its own roster line and the new rules text. Not yet run live: a `--model gemini-3.1-pro-high`
+review task through the real CLI (the stub test covers the flag).
+
 ## The plan-funded worker is the Antigravity CLI — live 2026-09-14 (D18, supersedes the Gemini CLI section below)
 
 Gemini CLI's Google login succeeded on the second phone relay, then every call answered

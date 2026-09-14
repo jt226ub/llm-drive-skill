@@ -57,4 +57,23 @@ else
   echo "  (no rules written for $provider: $rules is absent)"
 fi
 
+# The rest of the roster, one line each, so the session can pick per task
+# (`start --provider NAME [--model SLUG]` works whatever the mode's provider is).
+others=''
+for conf in "$PROVIDERS"/*.conf; do
+  [ -f "$conf" ] || continue
+  name=${conf##*/}; name=${name%.conf}
+  [ "$name" = "$provider" ] && continue
+  roster=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in roster=*) roster=${line#roster=} ;; esac
+  done < "$conf"
+  [ -n "$roster" ] || continue
+  others="$others- $name: $roster"$'\n'
+done
+if [ -n "$others" ]; then
+  echo "Other providers (start --provider NAME [--model SLUG]):"
+  printf '%s' "$others"
+fi
+
 exit 0

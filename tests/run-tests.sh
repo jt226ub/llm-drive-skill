@@ -1555,6 +1555,14 @@ case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
   "SIDECAR MODE IS ON (provider fix; worker w-42 is out"*) ok "with a worker out, the header says so" ;;
   *) bad "with a worker out, the header says so" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" ;;
 esac
+printf 'roster=an other model, for the record\n' > "$HHOME/.claude/drive-sidecar/providers/other.conf"
+printf 'model=x\n' > "$HHOME/.claude/drive-sidecar/providers/quiet.conf"
+case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
+  *"- second rule"*"Other providers (start --provider NAME [--model SLUG]):"*"- other: an other model, for the record"*) ok "after the rules the hook lists the other providers' roster lines" ;;
+  *) bad "after the rules the hook lists the other providers' roster lines" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" ;;
+esac
+case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in *"- quiet:"*|*"- fix:"*) bad "a profile without roster=, and the active provider, are not listed" ;; *) ok "a profile without roster=, and the active provider, are not listed" ;; esac
+rm -f "$HHOME/.claude/drive-sidecar/providers/other.conf" "$HHOME/.claude/drive-sidecar/providers/quiet.conf"
 printf 'nosuch\n' > "$HHOME/.claude/sidecar-mode"
 case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
   *"no rules written for nosuch"*) ok "a provider without a rules file gets the header and a pointer, not a failure" ;;
@@ -1635,6 +1643,17 @@ case "$(gsc spend)" in *"antigravity-cli: 1 run(s) today on the plan's quota"*) 
 gsc stop --worker "$GW" >/dev/null
 if [ ! -f "$SCHOME/.claude/sidecar-run/$GW.env" ] && [ ! -f "$SCHOME/.claude/sidecar-run/$GW.out" ]; then ok "stop removes the record and the CLI's output files"; else bad "stop removes the record"; fi
 if [ -d "$GREPO/.claude/worktrees/$GW" ]; then ok "and leaves the worktree with the work in it"; else bad "and leaves the worktree"; fi
+
+# --model: one of the profile's listed slugs for this run; anything else refuses (D19)
+case "$(gsc start --provider antigravity-cli --task x --model gemini-9-ultra)" in *"does not offer model gemini-9-ultra"*"gemini-3.1-pro-high"*) ok "start refuses a model the profile does not list, naming the ones it does" ;; *) bad "start refuses a model the profile does not list" "$(gsc start --provider antigravity-cli --task x --model gemini-9-ultra)" ;; esac
+case "$(sc start --task x --model gemini-3.1-pro-high)" in *"deepseek takes no --model"*) ok "a profile without models= takes no --model" ;; *) bad "a profile without models= takes no --model" "$(sc start --task x --model gemini-3.1-pro-high)" ;; esac
+rm -f "$AGY_ARGV"
+OUT="$(gsc start --provider antigravity-cli --task 'review it' --model gemini-3.1-pro-high)"
+GWM=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GWM.rc" ] && break; sleep 0.5; done
+case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"Rules of engagement for gemini-3.1-pro-high on antigravity-cli:"*"--model gemini-3.1-pro-high"*) ok "a listed --model reaches the CLI and the brief names it" ;; *) bad "a listed --model reaches the CLI and the brief names it" "$(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-200)" ;; esac
+case "$(gsc status)" in *"$GWM  antigravity-cli/gemini-3.1-pro-high"*) ok "status shows the model chosen for that run" ;; *) bad "status shows the model chosen for that run" "$(gsc status)" ;; esac
+gsc stop --worker "$GWM" >/dev/null
 
 # A worker that is still running: status says live, stop kills it.
 # exported, not prefixed: a prefix assignment on a shell function does not reach the processes it spawns

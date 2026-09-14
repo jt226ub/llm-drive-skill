@@ -760,3 +760,31 @@ any proxy of the CLI's login (terms). Verified with a stub `agy` in `tests/run-t
 and live: two real `agy -p` calls (`status SUCCESS`, 13k input tokens of the CLI's own
 system prompt per call) after the relay login.
 
+## 16. The roster: four models, four roles, one line each in every prompt — 2026-09-14
+
+The user set the roles: **Gemini 3.8 Flash** — a fast non-interactive coder (small and
+larger tasks; the CLI runs, answers and exits, so every task is a fresh `start`);
+**Gemini 3.1 Pro** — a slower non-interactive coding expert (small and larger tasks, help
+with task and project planning, review, brainstorming); **Qwen3.8-27B on the Kaggle TPU**
+— a fast interactive coder for small and large tasks, which must be booted and queued and
+is then used for the session, its budget being time rather than tokens; **DeepSeek V4.1
+Flash** — a fast interactive expert coder paid per API token, used sparingly.
+
+What changed to carry that:
+
+- `start --model SLUG` picks the model for one run on a profile that lists `models=`
+  (antigravity-cli: the three 3.8 Flash efforts and the two 3.1 Pro efforts); any other
+  slug, or a profile without the list, refuses. The run record and `status` show the
+  model chosen.
+- Each profile carries a one-line `roster=`; the sidecar-mode hook prints, after the
+  active provider's Orchestrator section, `Other providers (start --provider NAME
+  [--model SLUG]):` and one line per other profile. The mode's provider still decides
+  whose full rules are injected; the roster is what makes the others an option without
+  switching. The Kaggle TPU launcher writes its own roster line into `kaggle-tpu.conf`.
+- The Orchestrator sections of `antigravity-cli.rules.md` and `deepseek.rules.md`, and
+  the ones the Kaggle launcher writes, now say those roles in the user's words.
+
+Rejected: one profile per model (the rules would repeat and `/sidecar-on` would have to
+name an effort); putting the whole roster's rules in every prompt (the 15-line cap is
+there for a reason — one line per other provider is the compromise).
+

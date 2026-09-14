@@ -8,15 +8,17 @@ Anything else in this file is documentation and is read by nobody.
 
 ## Orchestrator
 
-- Use it for long, mechanical, well-specified coding work: scaffolding, test
-  writing, mechanical refactors, porting. Keep judgement calls and reviews here.
-- One worker at a time is enforced. Queue the next task only after `collect`
-  has shown you the diff; review the branch before the next task starts.
-- Cheap because of caching: the first turn pays the full prompt, later turns
-  pay ~0.5% of it. Long tasks are cheaper per result than many short ones.
-- Off-peak (16:30–00:30 UTC) is half price; batch the big jobs there.
-- It cannot see your conversation. Put everything it needs in --task: paths,
-  the definition of done, the tests to run, the branch name to commit to.
+- DeepSeek V4.1 Flash: a fast interactive expert coder — a Claude Code session of its
+  own that you can attach to and message — paid per token from the API balance, so use
+  it sparingly: when the free providers are down or the task needs an expert you can
+  talk to. Keep judgement calls and reviews here.
+- One worker at a time is enforced. Queue the next task only after `collect` has
+  shown you the diff; review the branch before the next task starts.
+- Cheap because of caching: the first turn pays the full prompt, later turns pay
+  ~0.5% of it. Long tasks are cheaper per result than many short ones; off-peak
+  (16:30–00:30 UTC) is half price.
+- It cannot see your conversation. Put everything it needs in --task: paths, the
+  definition of done, the tests to run, the branch name to commit to.
 
 ## Worker
 

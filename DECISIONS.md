@@ -737,3 +737,24 @@ plan); a fixed daily request cap (the plan's unit is not requests).
 **Consequences.** The Gemini CLI profile, rules and tests are gone; `sidecar-requests`
 now counts runs for this provider, not model calls; the cap is reactive (one run hits
 the wall before the sidecar knows), which is the best available without a quota API.
+
+## D19 — A per-task `--model` on profiles that list `models=`, and a roster line per provider in every prompt
+
+**Date** 2026-09-14 · **Status** accepted
+
+**Context.** The user named four roles for four models (DESIGN §16) and wants the
+orchestrator to choose per task: Gemini 3.8 Flash at three reasoning efforts or Gemini
+3.1 Pro at two from the same Antigravity login, the TPU's Qwen for interactive work by
+the session, DeepSeek sparingly. The hook injects only the active provider's rules.
+
+**Decision.** `start --model SLUG`, valid only when the profile's `models=` lists the
+slug (D18's antigravity-cli lists five); the profile's `model=` stays the default. Every
+profile carries `roster=` and the hook prints the other providers' roster lines after the
+active provider's section. Rules of engagement rewritten in the user's role words.
+
+**Rejected.** A profile per model or effort; injecting every provider's full rules
+(the per-prompt cap); letting `--model` through to a Claude Code worker (Claude Code
+validates model names against its own catalogue, DESIGN §1).
+
+**Consequences.** The hook reads every `.conf` on every prompt (a handful of small
+files); a provider without `roster=` is simply not listed.

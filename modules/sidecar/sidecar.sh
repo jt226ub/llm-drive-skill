@@ -1,7 +1,7 @@
 #!/bin/bash
 # Delegate coding work to a model on another provider, inside Claude Code.
 #
-#   sidecar.sh start  --task TEXT [--provider NAME] [--permission-mode MODE]
+#   sidecar.sh start  --task TEXT [--provider NAME] [--model SLUG] [--permission-mode MODE]
 #   sidecar.sh status
 #   sidecar.sh collect --worker NAME     the diff it produced, and what it cost
 #   sidecar.sh stop    --worker NAME
@@ -624,6 +624,13 @@ cmd_start() {
   [ -f "$profile" ] || die "no profile at $profile."
   local why
   _cap_reached why "$PROVIDER" && die "$PROVIDER has reached its cap: $why. Nothing launched. Use another provider, or raise the cap in $CONFIG (CAP_USD) or the profile (daily_requests)."
+  # --model is a per-run choice among the slugs the profile lists (D19); a Claude
+  # Code worker never gets one (it checks model names against its own catalogue).
+  if [ -n "$MODEL" ]; then
+    local models=''
+    _conf models "$profile" models || die "$PROVIDER takes no --model: its profile lists no models=."
+    case ",$models," in *",$MODEL,"*) ;; *) die "$PROVIDER does not offer model $MODEL. Its profile lists: ${models//,/ }" ;; esac
+  fi
   local harness=claude
   _conf harness "$profile" harness || harness=claude
   case $harness in
@@ -823,6 +830,7 @@ AGY_SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
 _start_agy() {
   local profile=$1 model='' timeout=''
   _conf model "$profile" model || model=auto
+  [ -n "$MODEL" ] && model=$MODEL
   _conf timeout "$profile" print_timeout || timeout=2h
   command -v agy >/dev/null 2>&1 || die "agy is not installed: curl -fsSL https://antigravity.google/cli/install.sh | bash, then run \`agy\` once to sign in."
   [ -f "$AGY_TOKEN" ] || die "not signed in to Antigravity CLI: $AGY_TOKEN is missing. Run \`agy\` once and sign in with Google; the worker cannot sign in for you."
@@ -1164,13 +1172,14 @@ cmd_off() {
 
 # ---------------------------------------------------------------------------
 
-TASK=''; WORKER=''; PROVIDER=''; PERMISSION_MODE=auto
+TASK=''; WORKER=''; PROVIDER=''; MODEL=''; PERMISSION_MODE=auto
 CMD=${1:-}; shift 2>/dev/null || true
 while [ $# -gt 0 ]; do
   case $1 in
     --task) TASK=${2:-}; shift 2 ;;
     --worker) WORKER=${2:-}; shift 2 ;;
     --provider) PROVIDER=${2:-}; shift 2 ;;
+    --model) MODEL=${2:-}; shift 2 ;;
     --permission-mode) PERMISSION_MODE=${2:-}; shift 2 ;;
     *) die "unknown argument $1" ;;
   esac
@@ -1197,7 +1206,7 @@ case $CMD in
   on)      cmd_on ;;
   off)     cmd_off ;;
   *) cat >&2 <<USAGE
-sidecar.sh start  --task TEXT [--provider NAME] [--permission-mode MODE]
+sidecar.sh start  --task TEXT [--provider NAME] [--model SLUG] [--permission-mode MODE]
 sidecar.sh status
 sidecar.sh collect --worker NAME
 sidecar.sh stop    --worker NAME
@@ -1207,6 +1216,7 @@ sidecar.sh on      [--provider NAME]   what /sidecar-on runs: record the provide
 sidecar.sh off
 
 --provider defaults to the name /sidecar-on was given (the flag file), else deepseek.
+--model picks one of the slugs the profile's models= lists, for this run only.
 
 --permission-mode defaults to auto, to match an orchestrator running in auto.
 It is deliberately not narrowed: acceptEdits lets a worker write a file and then
