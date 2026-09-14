@@ -9,11 +9,11 @@ front of the task the CLI receives. The rest of this file is documentation.
 - Non-interactive: the CLI runs one task to completion in its own worktree, answers, and
   exits — no messaging, no attach; a new task is a new `start`. Everything it needs goes
   in --task (paths, definition of done, tests to run, the commit message).
-- Gemini 3.8 Flash (default; `--model gemini-3.8-flash-high|-medium|-low`): a fast
-  non-interactive coder for small and larger tasks.
-- Gemini 3.1 Pro (`--model gemini-3.1-pro-high|-low`): a slower non-interactive coding
-  expert — small and larger tasks, help with task and project planning, review, and
-  brainstorming; a written answer comes back in `collect` under "what it said".
+- Gemini 3.8 Flash (default, at its highest reasoning effort): a fast non-interactive
+  coder for small and larger tasks. `-medium` / `-low` only to save quota.
+- Gemini 3.1 Pro (`--model gemini-3.1-pro-high`; `-low` only to save quota): a slower
+  non-interactive coding expert — small and larger tasks, help with task and project
+  planning, review, and brainstorming; the answer comes back in `collect` under "what it said".
 - Free within the plan: a quota refreshed every 5 h up to a weekly cap, no money; Google
   publishes no numbers, and a run that hits the quota marks it spent for 5 h (`spend`).
 - One worker at a time is enforced. Collect and review the branch before the next.
