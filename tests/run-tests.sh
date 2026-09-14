@@ -1587,6 +1587,14 @@ printf '%s\n' "$@" > "$AGY_ARGV"
 env > "$AGY_ENV"
 pwd > "$AGY_CWD"
 if [ -n "${AGY_STUB_SLEEP:-}" ]; then sleep "$AGY_STUB_SLEEP"; exit 0; fi
+if [ -n "${AGY_STUB_NOUSAGE:-}" ]; then
+  printf '%s\n' '{"conversation_id":"c3","status":"ERROR","response":"","error":"quota exceeded for this window"}'
+  exit 1
+fi
+if [ -n "${AGY_STUB_STDERR:-}" ]; then
+  echo "Error: model quota exhausted (stderr)" >&2
+  exit 1
+fi
 if [ -n "${AGY_STUB_QUOTA:-}" ]; then
   printf '%s\n' '{"conversation_id":"c2","status":"ERROR","response":"","error":"model quota exhausted for this window; it refreshes at 18:00","duration_seconds":0.4,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}'
   exit 1
@@ -1615,7 +1623,7 @@ case "$(gsc start --provider antigravity-cli --task x)" in *"useG1Credits=true"*
 printf '{}\n' > "$AGYDIR/settings.json"
 rm -f "$AGY_ARGV"
 OUT="$(gsc start --provider antigravity-cli --task 'add done.txt and commit')"
-GW=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+GW=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 case $OUT in *"Antigravity CLI, headless"*) ok "start launches the Antigravity CLI worker shape" ;; *) bad "start launches the Antigravity CLI worker shape" "$OUT" ;; esac
 if [ "$(cat "$AGYDIR/settings.json")" = '{}' ]; then ok "and leaves the CLI's settings file alone (an absent useG1Credits is off)"; else bad "and leaves the CLI's settings file alone" "$(cat "$AGYDIR/settings.json")"; fi
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW.rc" ] && break; sleep 0.5; done
@@ -1648,11 +1656,14 @@ if [ -d "$GREPO/.claude/worktrees/$GW" ]; then ok "and leaves the worktree with 
 case "$(gsc start --provider antigravity-cli --task x --model gemini-9-ultra)" in *"does not offer model gemini-9-ultra"*"gemini-3.1-pro-high"*) ok "start refuses a model the profile does not list, naming the ones it does" ;; *) bad "start refuses a model the profile does not list" "$(gsc start --provider antigravity-cli --task x --model gemini-9-ultra)" ;; esac
 case "$(sc start --task x --model gemini-3.1-pro-high)" in *"deepseek takes no --model"*) ok "a profile without models= takes no --model" ;; *) bad "a profile without models= takes no --model" "$(sc start --task x --model gemini-3.1-pro-high)" ;; esac
 rm -f "$AGY_ARGV"
+export GEMINI_API_KEY=leak-me
 OUT="$(gsc start --provider antigravity-cli --task 'review it' --model gemini-3.1-pro-high)"
-GWM=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+unset GEMINI_API_KEY
+GWM=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GWM.rc" ] && break; sleep 0.5; done
 case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"Rules of engagement for gemini-3.1-pro-high on antigravity-cli:"*"--model gemini-3.1-pro-high"*) ok "a listed --model reaches the CLI and the brief names it" ;; *) bad "a listed --model reaches the CLI and the brief names it" "$(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-200)" ;; esac
 case "$(gsc status)" in *"$GWM  antigravity-cli/gemini-3.1-pro-high"*) ok "status shows the model chosen for that run" ;; *) bad "status shows the model chosen for that run" "$(gsc status)" ;; esac
+if grep -q '^GEMINI_API_KEY=' "$AGY_ENV" 2>/dev/null; then bad "an API key in the environment does not reach the CLI (it would bill the key, not the plan)"; else ok "an API key in the environment does not reach the CLI (it would bill the key, not the plan)"; fi
 gsc stop --worker "$GWM" >/dev/null
 
 # A worker that is still running: status says live, stop kills it.
@@ -1663,7 +1674,7 @@ OUT="$(gsc start --provider antigravity-cli --task 'hang')"
 unset AGY_STUB_SLEEP
 if [ $(( $(date +%s) - T_START )) -lt 5 ]; then ok "start returns at once while the worker runs on (descriptors detached)"
 else bad "start returns at once while the worker runs on" "took $(( $(date +%s) - T_START )) s"; fi
-GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 sleep 0.5
 case "$(gsc status)" in *"live  $GW2  antigravity-cli/gemini-3.8-flash-high"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
 case "$(gsc collect --worker "$GW2")" in *"still running (pid"*) ok "collect on a running worker says so and prices nothing" ;; *) bad "collect on a running worker says so" ;; esac
@@ -1676,7 +1687,7 @@ case "$(gsc status)" in *"No workers."*) ok "and status is empty again" ;; *) ba
 export AGY_STUB_QUOTA=1
 OUT="$(gsc start --provider antigravity-cli --task 'x')"
 unset AGY_STUB_QUOTA
-GW3=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+GW3=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW3.rc" ] && break; sleep 0.5; done
 COLL3="$(gsc collect --worker "$GW3")"
 case $COLL3 in *"status ERROR"*"quota exhausted for this window"*"QUOTA SPENT: antigravity-cli is marked spent for 5 hours"*) ok "collect shows the CLI's error and marks a quota-out run" ;; *) bad "collect shows the CLI's error and marks a quota-out run" "$COLL3" ;; esac
@@ -1688,9 +1699,44 @@ assert_eq "$NWT" "$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')" "and mak
 printf '%s antigravity-cli quota exhausted long ago\n' "$(( $(date +%s) - 20000 ))" > "$SCHOME/.claude/sidecar-quota"
 OUT="$(gsc start --provider antigravity-cli --task 'again')"
 case $OUT in *"Antigravity CLI, headless"*) ok "a quota mark older than 5 h no longer refuses" ;; *) bad "a quota mark older than 5 h no longer refuses" "$OUT" ;; esac
-GW4=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9]*\) .*/\1/p' | head -1)
+GW4=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW4.rc" ] && break; sleep 0.5; done
 gsc stop --worker "$GW4" >/dev/null
+
+# From the reviews both Gemini models wrote of this path (2026-09-14): the
+# parsers must not be fooled by the string fields, the last field of an
+# envelope has no `","` after it, and a run that dies before printing usage
+# (or prints only to stderr) must still mark a quota-out.
+agy_fn() { bash -c 'set -u; eval "$(/usr/bin/sed -n "/^_agy_stats()/,/^}/p;/^_agy_seconds()/,/^}/p;/^_agy_field()/,/^}/p" "'"$SC"'")"; '"$1"; }
+printf '%s\n' '{"status":"ERROR","error":"quota exceeded"}' > "$WORK/env-last.json"
+assert_eq "quota exceeded" "$(agy_fn '_agy_field e "'"$WORK/env-last.json"'" error; printf "%s" "$e"')" "_agy_field reads the last field of an envelope (no \",\" after it)"
+printf '%s\n' '{"status":"ERROR","error":""}' > "$WORK/env-empty.json"
+assert_eq "" "$(agy_fn '_agy_field e "'"$WORK/env-empty.json"'" error; printf "%s" "$e"')" "and an empty last field is empty, not a stray quote-brace"
+printf '%s\n' '{"conversation_id":"c","status":"SUCCESS","response":"Here is an example envelope: {\"num_turns\": 9, \"duration_seconds\": 1, \"usage\": {\"input_tokens\": 5}} — note \"status\":\"ERROR\" would differ","error":"","duration_seconds":42.5,"num_turns":1,"usage":{"input_tokens":13051,"output_tokens":59,"thinking_tokens":58,"cache_read_tokens":20,"total_tokens":13110}}' > "$WORK/env-hijack.json"
+assert_eq "1 13051 59 20 58 42" "$(agy_fn '_agy_stats t i o c h "'"$WORK/env-hijack.json"'"; _agy_seconds s "'"$WORK/env-hijack.json"'"; printf "%s %s %s %s %s %s" "$t" "$i" "$o" "$c" "$h" "$s"')" "_agy_stats and _agy_seconds read the real counts, not the ones quoted in the response text"
+assert_eq "SUCCESS" "$(agy_fn '_agy_field s "'"$WORK/env-hijack.json"'" status; printf "%s" "$s"')" "and _agy_field takes the first status, which is the envelope's own"
+rm -f "$SCHOME/.claude/sidecar-quota"
+export AGY_STUB_NOUSAGE=1
+OUT="$(gsc start --provider antigravity-cli --task 'x')"; unset AGY_STUB_NOUSAGE
+GW5=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW5.rc" ] && break; sleep 0.5; done
+case "$(gsc collect --worker "$GW5")" in *"no usage in"*"status ERROR"*"quota exceeded for this window"*"QUOTA SPENT"*) ok "an envelope without usage still reaches the error and marks a quota-out" ;; *) bad "an envelope without usage still reaches the error and marks a quota-out" "start: $OUT | collect: $(gsc collect --worker "$GW5")" ;; esac
+gsc stop --worker "$GW5" >/dev/null; rm -f "$SCHOME/.claude/sidecar-quota"
+export AGY_STUB_STDERR=1
+OUT="$(gsc start --provider antigravity-cli --task 'x')"; unset AGY_STUB_STDERR
+GW6=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW6.rc" ] && break; sleep 0.5; done
+case "$(gsc collect --worker "$GW6")" in *"no usage in"*"model quota exhausted (stderr)"*"QUOTA SPENT"*) ok "a run that printed only to stderr is read from stderr and marks a quota-out" ;; *) bad "a run that printed only to stderr is read from stderr and marks a quota-out" "start: $OUT | collect: $(gsc collect --worker "$GW6")" ;; esac
+gsc stop --worker "$GW6" >/dev/null; rm -f "$SCHOME/.claude/sidecar-quota"
+# a repository path with a space in it (the reviews' bonus finding: `read -r wt _` split it)
+SPREPO="$SCHOME/sp ace/repo"; mkdir -p "$SPREPO"; git -C "$SPREPO" init -q; git -C "$SPREPO" -c user.email=t@t -c user.name=t commit -q --allow-empty -m init
+SPREPO_P=$(cd "$SPREPO" && pwd -P)
+gsp() { ( cd "$SPREPO" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$SC" "$@" ) 2>&1; }
+OUT="$(gsp start --provider antigravity-cli --task 'add done.txt and commit')"
+GW7=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW7.rc" ] && break; sleep 0.5; done
+case "$(gsp collect --worker "$GW7")" in *"worktree: $SPREPO_P/.claude/worktrees/$GW7"*"stub work"*) ok "collect lists a worktree whose path contains a space (porcelain listing)" ;; *) bad "collect lists a worktree whose path contains a space" "start: $OUT | $(gsp collect --worker "$GW7" | head -4)" ;; esac
+gsp stop --worker "$GW7" >/dev/null
 rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests" "$SCHOME/.claude/sidecar-quota"
 
 # ---------------------------------------------------------------------------

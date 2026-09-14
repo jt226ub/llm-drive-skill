@@ -45,8 +45,9 @@ coder, booted and queued once then used for the session, budget is time not toke
 interactive expert coder, paid, used sparingly. `start --model SLUG` picks among the antigravity-cli profile's
 `models=` (three Flash efforts, two Pro efforts); every profile carries `roster=` and the sidecar-mode hook lists
 the other providers' roster lines after the active provider's rules. The Kaggle TPU launcher (Anthropic Sidecar
-project) writes its own roster line and the new rules text. Not yet run live: a `--model gemini-3.1-pro-high`
-review task through the real CLI (the stub test covers the flag).
+project) writes its own roster line and the new rules text. Run live the same afternoon: the same code review by Flash (384 s, 49k output tokens, twelve findings) and by Pro
+(382 s, 33k output tokens, four findings, tighter and all real); the shared findings are fixed with tests (DESIGN §15,
+"Reviewed by both Gemini models"). The free plan did not run out during either.
 
 ## The plan-funded worker is the Antigravity CLI — live 2026-09-14 (D18, supersedes the Gemini CLI section below)
 

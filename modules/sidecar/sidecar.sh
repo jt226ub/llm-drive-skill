@@ -97,7 +97,12 @@ _agy_stats() {
   [ -f "$__f" ] || return 1
   __txt=$(tr -d ' \n\r\t' < "$__f")
   case $__txt in *'"usage":{'*) ;; *) return 1 ;; esac
+  # The string fields (response, error) come first and may quote any of these
+  # keys; the counts are read after the last duration_seconds (both Gemini
+  # reviews of 2026-09-14 flagged the unanchored version).
+  __txt=${__txt##*\"duration_seconds\":}
   __n=${__txt#*\"num_turns\":}; __turns=${__n%%[!0-9]*}
+  __txt=${__txt#*\"usage\":\{}
   __n=${__txt#*\"input_tokens\":}; __in=${__n%%[!0-9]*}
   __n=${__txt#*\"output_tokens\":}; __out=${__n%%[!0-9]*}
   __n=${__txt#*\"cache_read_tokens\":}; __ca=${__n%%[!0-9]*}
@@ -111,13 +116,15 @@ _agy_seconds() {
   [ -f "$__f" ] || return 1
   __txt=$(tr -d ' \n\r\t' < "$__f")
   case $__txt in *'"duration_seconds":'*) ;; *) return 1 ;; esac
-  __n=${__txt#*\"duration_seconds\":}; __n=${__n%%[!0-9]*}
+  __n=${__txt##*\"duration_seconds\":}; __n=${__n%%[!0-9]*}
   eval "$1=\${__n:-0}"
 }
 
 # _agy_field VARNAME FILE KEY — a top-level string field of that envelope
 # (`status`, `response`, `error`). Escapes are left as printed; a quote inside
-# a JSON string is always escaped, so cutting at the first `","` is safe.
+# a JSON string is always escaped, so cutting at the first `","` is safe. The
+# envelope's key order puts the string fields first, so the first match of a
+# key is the envelope's own, not text the model quoted.
 _agy_field() {
   local __f=$2 __key=$3 __txt
   [ -f "$__f" ] || return 1
@@ -125,6 +132,7 @@ _agy_field() {
   case $__txt in *"\"$__key\":\""*) ;; *) return 1 ;; esac
   __txt=${__txt#*\"$__key\":\"}
   __txt=${__txt%%\",\"*}
+  __txt=${__txt%\"\}}          # the last field of the envelope ends in "} instead
   eval "$1=\$__txt"
 }
 
@@ -898,6 +906,8 @@ $TASK"
   # the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
   # launching from a tool call would have hung with it.
   (
+    # an API key in the environment would make the CLI bill it instead of the plan
+    unset GEMINI_API_KEY GOOGLE_API_KEY
     cd "$wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$guard" \
       agy -p "$prompt" --output-format json --dangerously-skip-permissions --print-timeout "$timeout" ${margs[@]+"${margs[@]}"} \
         < /dev/null > "$RUN/$worker.out" 2> "$RUN/$worker.err"
@@ -914,7 +924,7 @@ $TASK"
     echo "worktree=$wt"
     echo "repo=$repo"
     echo "started=$(date +%s)"
-  } > "$RUN/$worker.env"
+  } > "$RUN/$worker.env.tmp" && mv "$RUN/$worker.env.tmp" "$RUN/$worker.env"   # whole or absent for status/collect/stop
   echo "worker $worker · $PROVIDER/$model (Antigravity CLI, headless) · $wt"
   echo "  budget:  the plan's quota (refreshed every 5 h up to a weekly cap, not readable headless); a run that hits it marks $PROVIDER spent for 5 h"
   echo "  watch:   tail -f \"$RUN/$worker.err\"   (the JSON result arrives in $RUN/$worker.out when it exits)"
@@ -970,14 +980,17 @@ cmd_collect() {
 
   echo "== what the worker changed =="
   local wt found=0
-  while read -r wt _; do
+  # --porcelain: one `worktree PATH` line each, so a path with spaces survives
+  # (the plain listing split "/Volumes/External Data/…" at the space)
+  while IFS= read -r line; do
+    case $line in "worktree "*) wt=${line#worktree } ;; *) continue ;; esac
     case $wt in *"/.claude/worktrees/"*) ;; *) continue ;; esac
     found=1
     echo "worktree: $wt"
     git -C "$wt" --no-pager log --oneline -5 2>/dev/null
     git -C "$wt" --no-pager diff --stat HEAD~1 2>/dev/null || \
       git -C "$wt" --no-pager status --short 2>/dev/null
-  done < <(git -C "$repo" worktree list 2>/dev/null)
+  done < <(git -C "$repo" worktree list --porcelain 2>/dev/null)
   [ "$found" = 1 ] || echo "(no worktree yet — the worker may still be starting)"
 
   echo
@@ -1070,10 +1083,13 @@ _collect_agy() {
     echo "still running (pid $pid); the CLI prints its result and usage when it exits."
     return 0
   fi
+  # A run that died early prints an envelope without usage, or nothing but
+  # stderr; the error and the quota mark still have to be read (both Gemini
+  # reviews, 2026-09-14), so this no longer returns here.
+  local no_usage=0
   if ! _agy_stats turns inn outt ca th "$out"; then
-    echo "no usage yet: $out holds no JSON result. Exit code: $(cat "$RUN/$WORKER.rc" 2>/dev/null || echo unknown); stderr tail:"
-    tail -n 5 "$RUN/$WORKER.err" 2>/dev/null | sed 's/^/  /'
-    return 1
+    no_usage=1; turns=0; inn=0; outt=0; ca=0; th=0
+    echo "no usage in $out (exit code $(cat "$RUN/$WORKER.rc" 2>/dev/null || echo unknown))"
   fi
   _agy_field st "$out" status || st='?'
   local secs=0 rate=''
@@ -1081,16 +1097,18 @@ _collect_agy() {
   # output tokens over the whole run (tool time included): what the rate feels like from outside
   [ "$secs" -gt 0 ] && rate=", ~$(( (outt + th) / secs )) output tok/s over the run"
   echo "$provider/$model · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
-  echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
+  [ "$no_usage" = 0 ] && echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
   if [ "$st" != SUCCESS ]; then
     _agy_field err "$out" error || err=''
+    [ -n "$err" ] || err=$(tail -n 5 "$RUN/$WORKER.err" 2>/dev/null | tr '\n' ' ')
     echo "== the CLI reported an error =="
     printf '%s\n' "${err:-(no message)}"
   fi
   if _agy_field resp "$out" response && [ -n "$resp" ]; then
     echo "== what it said =="
-    resp=${resp//\\\"/\"}
-    printf '%b\n' "${resp:0:1200}"     # %b: the envelope's \n and \t come out as line breaks and tabs
+    # the envelope's escapes, by hand: printf %b on model text would obey any escape it contains
+    resp=${resp//\\\"/\"}; resp=${resp//\\n/$'\n'}; resp=${resp//\\t/$'\t'}
+    printf '%s\n' "${resp:0:1200}"
   fi
   if [ -f "$RUN/$WORKER.collected" ]; then
     echo "(already collected once — not counted again)"

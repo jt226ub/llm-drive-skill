@@ -760,6 +760,27 @@ any proxy of the CLI's login (terms). Verified with a stub `agy` in `tests/run-t
 and live: two real `agy -p` calls (`status SUCCESS`, 13k input tokens of the CLI's own
 system prompt per call) after the relay login.
 
+**Reviewed by both Gemini models through the sidecar itself, 2026-09-14.** The same
+review task (no edits, answer in the response) went to `gemini-3.8-flash-high` and
+`gemini-3.1-pro-high`. Flash: 384 s, 387k input tokens (+636k cache reads), 49k output
+(+39k thinking), a 26k-character review with twelve findings, and it ran the whole test
+suite unasked. Pro: 382 s, 98k input (+337k cached), 33k output (+31k thinking), a
+5k-character review with four findings plus one outside the asked scope. Both found the
+same three real defects: `_agy_stats` and `_agy_field` read the first match of a key, so
+a response quoting `"num_turns"` or `"status"` could be taken for the envelope's own;
+`_agy_field` left `"}` on the last field of an envelope; and `_collect_agy` returned
+before the error check when the envelope had no `usage`, so an early quota failure was
+never marked. Flash alone added: a quota message printed only to stderr was never read,
+`printf '%b'` on model text, an inherited `GEMINI_API_KEY` would make the CLI bill the
+key instead of the plan, the run record was written non-atomically, and the pid `stop`
+kills is the launching subshell's. Pro alone added the porcelain worktree listing (the
+plain listing split `/Volumes/External Data/…` at the space, which is why both reviews'
+`collect` output said "no worktree yet"). Fixed: all of these except the pid concern
+(`stop` already kills the subshell's children; a recycled pid is a theoretical hazard
+left as is) and the orphaned worktree on an early `start` failure (low, left as is).
+Each fix has a test. On this evidence Pro's review was the one to read and Flash's the
+one to grep; both were worth the quota.
+
 ## 16. The roster: four models, four roles, one line each in every prompt — 2026-09-14
 
 The user set the roles: **Gemini 3.8 Flash** — a fast non-interactive coder (small and
