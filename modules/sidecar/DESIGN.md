@@ -609,12 +609,19 @@ a provider key:
 1. **Does Claude Code render MCP progress notifications in the tool panel?** If
    it does, live progress comes free. If not, `claude attach` is the way to
    watch. Either way the delegate must emit them or the call is aborted.
-2. **Does the Anthropic shim surface DeepSeek's cache hit/miss counts?** Both
-   probes reported `cache_creation_input_tokens: 0` and
-   `cache_read_input_tokens: 0` — but both were cold, so a miss is exactly what
-   should have happened and nothing is settled. Re-run against a warm prefix. If
-   the shim reports zeros regardless, the caching may still be happening and
-   billing cheaper while being invisible to us, and the ledger will overstate.
+2. **Does the Anthropic shim surface DeepSeek's cache hit/miss counts?**
+   **Answered 2026-09-13: yes, and the cache holds on a real agent loop.** A
+   25,242-token system prefix sent three times through
+   `/anthropic/v1/messages` reported 25,242 miss / 0 hit on the first call and
+   **154 miss / 25,088 hit** on the second and third (`cache_read_input_tokens`);
+   the native `/chat/completions` control reports the same split. A worker
+   started by `start` (nine responses, three files created one tool call at a
+   time) reported 51,088 miss on its first response and 147–388 miss / 51,840–
+   52,992 hit on every later one — 99.5 % of input at the hit rate, ≈$0.02 for
+   the run. The two cold probes in §10a were simply cold. Consequences: the
+   ledger's per-token pricing is right to bill `cache_read_input_tokens` at the
+   hit rate, and `cache_creation_input_tokens` stays 0 on this provider (no
+   write charge), as `prices.conf` already assumes.
 3. **Do the other providers' endpoints behave?** Only DeepSeek has been run.
 
 Answered by the runs in §10a and §10b: the worker starts and works, peer

@@ -146,11 +146,11 @@ Both figures are shown, because a gap between them is information.
   not the ledger, for the same reason.
 - **The DeepSeek balance is $5.00, not the $80/month cap.** Keep probes small
   until the owner tops it up or rotates to a funded key.
-- **Three questions remain open, none of them structural** — whether Claude Code
-  renders MCP progress notifications in the tool panel, whether the Anthropic
-  shim surfaces cache hit counts on a *warm* prefix (both probes read zero, but
-  both were cold, so nothing is settled), and whether any provider other than
-  DeepSeek behaves. `modules/sidecar/DESIGN.md` §11 has them.
+- **Two questions remain open, neither structural** — whether Claude Code
+  renders MCP progress notifications in the tool panel, and whether any provider
+  other than DeepSeek behaves. The cache question is answered (2026-09-13): the
+  shim reports hits and a warm agent loop runs at a 99.5 % hit rate, so the
+  ledger's pricing of cache reads stands. `modules/sidecar/DESIGN.md` §11.
 - **The worker cannot tell what it is.** It reported `claude-sonnet-5` in good
   faith. Anything that needs the real model must be told by the launcher, and the
   ledger must never ask the worker.
