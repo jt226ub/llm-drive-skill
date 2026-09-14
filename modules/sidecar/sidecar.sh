@@ -40,10 +40,10 @@ BALANCE="$HOME/.claude/sidecar-balance"
 EXTRA="$HOME/.claude/statusline-extra"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG="$HOME/.claude/sidecar-config"
-# The monthly spend cap, in whole dollars. Advisory by decision: it colours the
-# status line and stops nothing. Read from CONFIG so it is not baked into the
-# script — a provider billed in something other than dollars is exactly the case
-# this module is meant to grow into.
+# The monthly spend cap, in whole dollars, for token-billed providers. `start`
+# refuses a provider that has reached its cap (D17); requests-billed and
+# time-billed providers have their own caps in their profiles. Read from CONFIG
+# so it is not baked into the script.
 CAP_USD=80
 if [ -f "$CONFIG" ]; then
   while IFS= read -r __cl || [ -n "$__cl" ]; do
@@ -388,11 +388,12 @@ _sample_balance() {
 # Returns 1 when there are fewer than two readings this month, because one
 # reading is a number and not yet a measurement.
 _billed_mtd() {
-  local __month __ts __prov __bal __prev='' __total=0 __n=0
+  local __month __ts __prov __bal __prev='' __total=0 __n=0 __only=${2:-}
   __month=$(date +%Y-%m)
   [ -f "$BALANCE" ] || { eval "$1=0"; return 1; }
   while read -r __ts __prov __bal; do
     case $__ts in "$__month"*) ;; *) continue ;; esac
+    [ -z "$__only" ] || [ "$__prov" = "$__only" ] || continue
     case $__bal in ''|*[!0-9]*) continue ;; esac
     __n=$((__n + 1))
     if [ -n "$__prev" ] && [ "$__bal" -lt "$__prev" ]; then
@@ -404,18 +405,131 @@ _billed_mtd() {
   [ "$__n" -ge 2 ]
 }
 
-# _month_to_date VARNAME — micro-USD spent this calendar month.
+# _month_to_date VARNAME [PROVIDER] — micro-USD spent this calendar month.
 _month_to_date() {
-  local __month __total=0 __ts __a __b __c __d __e __micro __rest
+  local __month __total=0 __ts __a __b __c __d __e __micro __rest __only=${2:-}
   __month=$(date +%Y-%m)
   if [ -f "$LEDGER" ]; then
     while read -r __ts __a __b __c __d __e __micro __rest; do
       case $__ts in "$__month"*) ;; *) continue ;; esac
+      [ -z "$__only" ] || [ "$__a" = "$__only" ] || continue
       case $__micro in ''|*[!0-9]*) continue ;; esac
       __total=$((__total + __micro))
     done < "$LEDGER"
   fi
   eval "$1=\$__total"
+}
+
+# _anthropic_line VARNAME — the subscription's own windows, from the budget
+# sensor's state file. Always shown by `spend`: the point of a sidecar is what
+# it saves here.
+_anthropic_line() {
+  local __f="$HOME/.claude/budget-state" __l __five='' __seven='' __reset='' __t='' __out
+  if [ -f "$__f" ]; then
+    while IFS= read -r __l || [ -n "$__l" ]; do
+      case $__l in
+        FIVE_H_PCT=*) __five=${__l#*=} ;; SEVEN_D_PCT=*) __seven=${__l#*=} ;; FIVE_H_RESET=*) __reset=${__l#*=} ;;
+      esac
+    done < "$__f"
+  fi
+  if [ -z "$__five" ] && [ -z "$__seven" ]; then
+    __out="Anthropic: no plan-limit reading yet (the budget sensor writes $__f once a session has answered)"
+  else
+    __out="Anthropic:"
+    if [ -n "$__five" ]; then
+      case $__reset in ''|*[!0-9]*) ;; *) __t=$(date -r "$__reset" +%H:%M 2>/dev/null || date -d "@$__reset" +%H:%M 2>/dev/null) ;; esac
+      __out="$__out 5h ${__five%%.*}% used${__t:+ (resets $__t)}"
+    fi
+    [ -n "$__seven" ] && __out="$__out${__five:+ ·} 7d ${__seven%%.*}% used"
+  fi
+  eval "$1=\$__out"
+}
+
+# _latest_reading VARNAME PROVIDER — the newest balance reading for a provider
+# (micro-units: micro-USD for money, minutes×10^6 for time), or 1 when none.
+_latest_reading() {
+  local __ts __prov __bal __last=''
+  [ -f "$BALANCE" ] || return 1
+  while read -r __ts __prov __bal; do
+    [ "$__prov" = "$2" ] || continue
+    case $__bal in ''|*[!0-9]*) continue ;; esac
+    __last=$__bal
+  done < "$BALANCE"
+  [ -n "$__last" ] || return 1
+  eval "$1=\$__last"
+}
+
+# Callers below pass names no helper declares as a local (__spent, __left, __bill):
+# _month_to_date and _latest_reading have their own __micro and __bal, and an
+# eval into a colliding name assigns the helper's local, not the caller's.
+# _provider_in_use PROVIDER — a worker is out on it, or it has cost something
+# in the current period. Others are not shown: a line for every profile would
+# bury the ones that matter.
+_provider_in_use() {
+  local __f __l __spent __req __today
+  for __f in "$RUN"/*.env; do
+    [ -f "$__f" ] || continue
+    while IFS= read -r __l || [ -n "$__l" ]; do
+      [ "$__l" = "provider=$1" ] && return 0
+    done < "$__f"
+  done
+  _month_to_date __spent "$1"; [ "$__spent" -gt 0 ] && return 0
+  _requests_today __req "$1"; [ "$__req" -gt 0 ] && return 0
+  __today=$(date +%Y-%m-%d)
+  [ -f "$BALANCE" ] && grep -q "^$__today[^ ]* $1 " "$BALANCE" 2>/dev/null && return 0
+  return 1
+}
+
+# _cap_reached VARNAME PROVIDER — 0 with the reason when the provider's cap is
+# reached: money (CAP_USD, the higher of the estimate and the billed figure),
+# requests (daily_requests), or time (a balance reading of the session's
+# minutes at 0, taken fresh). `start` refuses on it; `spend` says so.
+_cap_reached() {
+  local __prof="$SELF_DIR/providers/$2.conf" __billing=tokens __spent __bill __usd_out __daily __req __left
+  _conf __billing "$__prof" billing || __billing=tokens
+  case $__billing in
+    tokens)
+      _month_to_date __spent "$2"
+      _billed_mtd __bill "$2" && [ "$__bill" -gt "$__spent" ] && __spent=$__bill
+      if [ "$__spent" -ge $((CAP_USD * 1000000)) ]; then
+        _usd __usd_out "$__spent"; eval "$1=\"\\\$$__usd_out of the \\\$$CAP_USD monthly cap; it resets on the 1st\""; return 0
+      fi ;;
+    requests)
+      _conf __daily "$__prof" daily_requests || return 1
+      _requests_today __req "$2"
+      if [ "$__req" -ge "$__daily" ]; then eval "$1=\"$__req of $__daily model requests today; it resets at midnight\""; return 0; fi ;;
+    *)
+      _conf __usd_out "$__prof" balance_url || return 1
+      _sample_balance "$2" 2>/dev/null
+      _latest_reading __left "$2" || return 1
+      if [ "$__left" -le 0 ]; then eval "$1=\"the session's time is up (0 min left at the last reading)\""; return 0; fi ;;
+  esac
+  return 1
+}
+
+# _provider_line VARNAME PROVIDER — one line per kind of cost.
+_provider_line() {
+  local __prof="$SELF_DIR/providers/$2.conf" __billing=tokens __spent __bill __usd_out __usd_bill __daily __req __left __why __out
+  _conf __billing "$__prof" billing || __billing=tokens
+  case $__billing in
+    tokens)
+      _month_to_date __spent "$2"; _usd __usd_out "$__spent"
+      __out="$2: API est \$$__usd_out"
+      if _billed_mtd __bill "$2"; then _usd __usd_bill "$__bill"; __out="$__out · billed \$$__usd_bill"; fi
+      __out="$__out / \$$CAP_USD this month" ;;
+    requests)
+      _conf __daily "$__prof" daily_requests || __daily='?'
+      _requests_today __req "$2"
+      __out="$2: $__req of $__daily model requests today (the plan's allowance, not money)" ;;
+    *)
+      if _latest_reading __left "$2"; then
+        __out="$2: $((__left / 1000000)) min of session time left at the last reading"
+      else
+        __out="$2: in use, unmetered"
+      fi ;;
+  esac
+  _cap_reached __why "$2" && __out="$__out — CAP REACHED ($__why); start refuses"
+  eval "$1=\$__out"
 }
 
 # Rewrite the status line segment. The budget sensor prints the first line of
@@ -434,9 +548,7 @@ _write_extra() {
     _usd bdollars "$billed"
     text="API est \$$dollars · billed \$$bdollars / \$$CAP_USD"
   fi
-  # Over the cap is a colour change and nothing else. The cap is advisory by
-  # decision: it says the month has cost more than intended, it does not decide
-  # that the work should stop.
+  # Over the cap is red here; `start` is what refuses (D17).
   if [ "$micro" -gt $((CAP_USD * 1000000)) ]; then
     text="$(printf '\033[31m%s\033[0m' "$text")"
   fi
@@ -489,6 +601,8 @@ cmd_start() {
   [ -n "$TASK" ] || die "start needs --task TEXT."
   local profile="$SELF_DIR/providers/$PROVIDER.conf"
   [ -f "$profile" ] || die "no profile at $profile."
+  local why
+  _cap_reached why "$PROVIDER" && die "$PROVIDER has reached its cap: $why. Nothing launched. Use another provider, or raise the cap in $CONFIG (CAP_USD) or the profile (daily_requests)."
   local harness=claude
   _conf harness "$profile" harness || harness=claude
   case $harness in
@@ -951,33 +1065,24 @@ cmd_stop() {
 }
 
 cmd_spend() {
-  local prof pname today daily
+  local line prof pname any_tokens=0 billing
+  _anthropic_line line
+  echo "$line"
   for prof in "$SELF_DIR"/providers/*.conf; do
     [ -f "$prof" ] || continue
-    _conf daily "$prof" daily_requests || continue
     pname=${prof##*/}; pname=${pname%.conf}
-    _requests_today today "$pname"
-    echo "$pname: $today of $daily model requests today (the plan's daily allowance, not money)"
+    _provider_in_use "$pname" || continue
+    # A reading first, so `spend` keeps the balance log fed.
+    _sample_balance "$pname" 2>/dev/null
+    _provider_line line "$pname"
+    echo "$line"
+    _conf billing "$prof" billing || billing=tokens
+    [ "$billing" = tokens ] && any_tokens=1
   done
-  local micro dollars billed bdollars over=''
-  # Take a reading first, so `spend` is also the way to keep the log fed on a
-  # month where no worker has been collected.
-  _sample_balance "$PROVIDER" 2>/dev/null
-  _month_to_date micro
-  _usd dollars "$micro"
-  [ "$micro" -gt $((CAP_USD * 1000000)) ] && over=' — over the cap (advisory; nothing is stopped)'
-  echo "estimated from the ledger: \$$dollars of \$$CAP_USD$over"
-  if _billed_mtd billed; then
-    _usd bdollars "$billed"
-    echo "billed by the provider:    \$$bdollars    (balance readings this month)"
-    echo "  The estimate prices token counts against a table maintained by hand;"
-    echo "  the billed figure is the provider's own balance falling. They answer"
-    echo "  different questions, so a gap between them is information, not a bug."
-  else
-    echo "billed by the provider:    not yet — fewer than two balance readings this month."
-    echo "  One reading is a number, not a measurement. Run this again after a"
-    echo "  worker has been collected, or check that the provider profile has a"
-    echo "  balance_url at all."
+  if [ "$any_tokens" = 1 ]; then
+    echo "  API est prices token counts against a table maintained by hand; billed is the"
+    echo "  provider's own balance falling (needs two readings this month). A gap between"
+    echo "  them is information, not a bug."
   fi
 }
 

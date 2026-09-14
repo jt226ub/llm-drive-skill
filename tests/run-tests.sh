@@ -1645,6 +1645,65 @@ case "$(gsc status)" in *"No workers."*) ok "and status is empty again" ;; *) ba
 rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests"
 
 # ---------------------------------------------------------------------------
+group "Sidecar — three kinds of cost in spend, and the caps that stop a provider"
+# ---------------------------------------------------------------------------
+BM="$(date +%Y-%m)"; TODAY="$(date +%Y-%m-%d)"
+rm -f "$SCHOME/.claude/sidecar-run"/*.env "$SCHOME/.claude/sidecar-requests" "$SCHOME/.claude/sidecar-config" "$SCHOME/.claude/budget-state"
+: > "$SCHOME/.claude/sidecar-ledger"; rm -f "$SCHOME/.claude/sidecar-balance"
+case "$(sc spend)" in
+  "Anthropic: no plan-limit reading yet"*) ok "spend leads with Anthropic even when the sensor has written nothing" ;;
+  *) bad "spend leads with Anthropic even when the sensor has written nothing" "$(sc spend | head -1)" ;;
+esac
+printf 'UPDATED=1\nRATE_LIMITS=present\nFIVE_H_PCT=28.4\nFIVE_H_RESET=1789407600\nSEVEN_D_PCT=89\nSEVEN_D_RESET=1789776000\n' > "$SCHOME/.claude/budget-state"
+case "$(sc spend | head -1)" in
+  "Anthropic: 5h 28% used (resets "??:??") · 7d 89% used") ok "spend renders the 5h and 7d windows from the sensor's state" ;;
+  *) bad "spend renders the 5h and 7d windows" "$(sc spend | head -1)" ;;
+esac
+SPEND="$(sc spend)"
+case $SPEND in *deepseek:*|*gemini-cli:*|*selfhosted:*) bad "a provider with no worker and no spend this period is not listed" "$SPEND" ;; *) ok "a provider with no worker and no spend this period is not listed" ;; esac
+printf '%s-12T10:00:00 deepseek deepseek-flash 1 2 3 1500000 s1\n' "$BM" > "$SCHOME/.claude/sidecar-ledger"
+case "$(sc spend)" in *"deepseek: API est \$1.50 / \$80 this month"*) ok "a token-billed provider with spend this month is listed with est / cap" ;; *) bad "a token-billed provider with spend this month is listed" "$(sc spend)" ;; esac
+printf '%s gemini-cli 12\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
+case "$(sc spend)" in *"gemini-cli: 12 of 1500 model requests today"*) ok "a requests-billed provider with requests today is listed" ;; *) bad "a requests-billed provider with requests today is listed" "$(sc spend)" ;; esac
+# selfhosted's profile lives in the ALT module copy (no balance_url, billing=none), so ask that copy
+alt() { ( cd "$SCHOME/repo" && HOME="$SCHOME" PATH="$SCSTUB:$PATH" bash "$ALT/sidecar.sh" "$@" ) 2>&1; }
+printf 'worker=w1\nprovider=selfhosted\nmodel=m\nsession=s\nrepo=%s\n' "$SCHOME/repo" > "$SCHOME/.claude/sidecar-run/w1.env"
+case "$(alt spend)" in *"selfhosted: in use, unmetered"*) ok "a provider with a worker out is listed even with nothing metered" ;; *) bad "a provider with a worker out is listed" "$(alt spend)" ;; esac
+rm -f "$SCHOME/.claude/sidecar-run/w1.env"
+
+# Money cap: the higher of estimate and billed against CAP_USD; start refuses.
+printf 'CAP_USD=1\n' > "$SCHOME/.claude/sidecar-config"
+case "$(sc spend)" in *"deepseek: API est \$1.50 / \$1 this month — CAP REACHED (\$1.50 of the \$1 monthly cap; it resets on the 1st); start refuses"*) ok "spend marks a token-billed provider at its monthly cap" ;; *) bad "spend marks a token-billed provider at its cap" "$(sc spend)" ;; esac
+rm -f "$CLAUDE_ARGV"
+case "$(sc start --task x)" in *"deepseek has reached its cap"*"resets on the 1st"*) ok "start refuses a provider at its monthly cap" ;; *) bad "start refuses a provider at its monthly cap" "$(sc start --task x)" ;; esac
+if [ ! -f "$CLAUDE_ARGV" ]; then ok "and launches nothing"; else bad "and launches nothing"; fi
+rm -f "$SCHOME/.claude/sidecar-config"
+# Requests cap: today's count against daily_requests; start refuses; the worktree is never made.
+printf '%s gemini-cli 1500\n' "$TODAY" > "$SCHOME/.claude/sidecar-requests"
+case "$(gsc spend)" in *"gemini-cli: 1500 of 1500 model requests today"*"CAP REACHED (1500 of 1500 model requests today; it resets at midnight); start refuses"*) ok "spend marks a requests-billed provider at its daily cap" ;; *) bad "spend marks a requests-billed provider at its daily cap" "$(gsc spend)" ;; esac
+NWT=$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')
+case "$(gsc start --provider gemini-cli --task x)" in *"gemini-cli has reached its cap"*"resets at midnight"*) ok "start refuses a requests-billed provider at its daily cap" ;; *) bad "start refuses a requests-billed provider at its cap" "$(gsc start --provider gemini-cli --task x)" ;; esac
+assert_eq "$NWT" "$(git -C "$GREPO" worktree list | wc -l | tr -d ' ')" "and makes no worktree"
+rm -f "$SCHOME/.claude/sidecar-requests"
+# Time cap: a time-billed provider (a Kaggle session) whose last reading says 0 minutes.
+cat > "$ALT/providers/timeprov.conf" <<'EOF'
+base_url=https://example.invalid
+cred_var=ANTHROPIC_AUTH_TOKEN
+cred_key=DEEPSEEK_API_KEY
+model=m
+model_alias=sonnet
+balance_url=https://example.invalid/session/quota
+balance_field=session_remaining_min
+billing=none
+EOF
+printf '%sT01:00:00 timeprov 0\n' "$TODAY" > "$SCHOME/.claude/sidecar-balance"
+case "$(alt spend)" in *"timeprov: 0 min of session time left at the last reading — CAP REACHED (the session's time is up"*) ok "spend marks a time-billed provider whose session is over" ;; *) bad "spend marks a time-billed provider whose session is over" "$(alt spend)" ;; esac
+case "$(alt start --provider timeprov --task x)" in *"timeprov has reached its cap: the session's time is up"*) ok "start refuses a time-billed provider whose session is over" ;; *) bad "start refuses a time-billed provider whose session is over" "$(alt start --provider timeprov --task x)" ;; esac
+printf '%sT01:00:00 timeprov 34000000\n' "$TODAY" > "$SCHOME/.claude/sidecar-balance"
+case "$(alt spend)" in *"timeprov: 34 min of session time left"*"CAP REACHED"*) bad "a session with time left is not capped" "$(alt spend)" ;; *"timeprov: 34 min of session time left at the last reading"*) ok "a session with time left is listed with its minutes and not capped" ;; *) bad "a session with time left is listed" "$(alt spend)" ;; esac
+rm -f "$SCHOME/.claude/sidecar-balance" "$SCHOME/.claude/budget-state" "$ALT/providers/timeprov.conf"
+
+# ---------------------------------------------------------------------------
 group "Sidecar — the status line segment the budget sensor prints"
 # ---------------------------------------------------------------------------
 rm -f "$BHOME/.claude/statusline-extra"

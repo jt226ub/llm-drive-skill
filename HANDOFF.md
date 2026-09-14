@@ -55,6 +55,17 @@ repo `sidecar.sh start --task "..."`; `status`; `collect`; check the JSON `stats
 (`stats.models.<m>.api.totalRequests`, `.tokens`), that `--skip-trust` really suppresses the trust prompt in
 a fresh worktree, and that a real run's requests land in `~/.claude/sidecar-requests`.
 
+## `spend` shows three kinds of cost; caps refuse `start` — 2026-09-14 (D17)
+
+`spend` prints Anthropic's 5h/7d windows first and always (from `~/.claude/budget-state`), then one line
+per provider that is in use — a worker out, or spend this period — by billing kind: money (`API est $X ·
+billed $Y / $CAP this month`), requests (`N of 1500 model requests today`), time (`N min of session time
+left at the last reading`). A provider at its cap is marked `CAP REACHED … start refuses`, and `start`
+refuses it before launching anything: money at `CAP_USD` (higher of estimate and billed), requests at
+`daily_requests`, time at a fresh session reading of 0 min. Tests cover all three kinds and all three
+refusals. Found on the way: three more `eval`-into-a-colliding-local bugs (`_month_to_date` owns
+`__micro`, `_latest_reading` owns `__bal`, `_usd` owns `__d`); callers now use names no helper declares.
+
 ## What this session did
 
 **Budget module: built, installed, live.** Sensor, gate, park and resume, with

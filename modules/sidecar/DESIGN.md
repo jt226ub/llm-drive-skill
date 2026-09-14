@@ -700,3 +700,19 @@ undocumented and `collect` needs to find the worktree).
 Verified with a stub `gemini` in `tests/run-tests.sh` (argv, env, cwd, commit, JSON
 stats, exit codes, a hanging worker killed by `stop`). Not yet run against the real
 CLI: the login needs the user at the machine.
+
+## 14. Three kinds of cost, and caps that stop a provider — 2026-09-14
+
+`spend` now prints one line per kind and nothing else: the Anthropic subscription's
+windows first and always (from the budget sensor's `budget-state`: "5h 28% used (resets
+HH:MM) · 7d 89% used"), then one line per provider that is *in use* — a worker out, or
+spend in the current period — by its billing kind: `tokens` ("API est $X · billed $Y /
+$CAP this month"), `requests` ("N of 1,500 model requests today"), time ("N min of session
+time left at the last reading", from `balance_url`). Providers with nothing to report are
+not listed, so the lines that matter are not buried.
+
+Caps are enforced at `start`, not advisory: a token-billed provider at `CAP_USD` (the
+higher of estimate and billed), a requests-billed one at `daily_requests`, a time-billed
+one whose fresh session reading is 0 minutes. `start` refuses with the reason and when it
+resets; `spend` marks the line "CAP REACHED … start refuses". The status line still turns
+red at the money cap. This supersedes the "advisory by decision" stance the cap had.

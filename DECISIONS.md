@@ -689,3 +689,24 @@ push guard in the environment, and records a pid. `status`/`stop` work from the 
 **Consequences.** Two worker shapes to keep in step; no peer messaging with a Gemini
 worker; a second ledger (`sidecar-requests`, requests not money). The rules-of-engagement
 feature (D15) carries over unchanged.
+
+## D17 — `spend` reports the three kinds of cost, and a reached cap refuses `start`
+
+**Date** 2026-09-14 · **Status** accepted · supersedes the advisory cap
+
+**Context.** The user runs three kinds of allowance through the sidecar — API money
+(DeepSeek), Kaggle's TPU session time, and subscription usage (Anthropic's windows;
+Gemini's daily requests) — and asked for all three printed, Anthropic always, workers
+only while in use, and for a provider at its cap to be unusable.
+
+**Decision.** `spend` prints Anthropic from the budget sensor's state, then one line per
+in-use provider by billing kind. `_cap_reached` decides per kind (money: higher of
+estimate/billed vs `CAP_USD`; requests: today vs `daily_requests`; time: a fresh session
+reading at 0) and `start` refuses on it before launching anything.
+
+**Rejected.** Keeping the cap advisory (the user's ask); listing every profile (noise);
+enforcing caps inside a running worker (nothing in the sidecar sits in the request path
+of a Claude Code or Gemini CLI worker — the cap holds at the next `start`).
+
+**Consequences.** A worker already out finishes past the cap. Time caps rely on the
+provider's own reading (the Kaggle kernel stops itself at its cap anyway).
