@@ -105,6 +105,16 @@ _agy_stats() {
   eval "$1=\${__turns:-0}; $2=\${__in:-0}; $3=\${__out:-0}; $4=\${__ca:-0}; $5=\${__th:-0}"
 }
 
+# _agy_seconds VARNAME FILE — the envelope's duration_seconds, whole seconds.
+_agy_seconds() {
+  local __f=$2 __txt __n
+  [ -f "$__f" ] || return 1
+  __txt=$(tr -d ' \n\r\t' < "$__f")
+  case $__txt in *'"duration_seconds":'*) ;; *) return 1 ;; esac
+  __n=${__txt#*\"duration_seconds\":}; __n=${__n%%[!0-9]*}
+  eval "$1=\${__n:-0}"
+}
+
 # _agy_field VARNAME FILE KEY — a top-level string field of that envelope
 # (`status`, `response`, `error`). Escapes are left as printed; a quote inside
 # a JSON string is always escaped, so cutting at the first `","` is safe.
@@ -1066,8 +1076,12 @@ _collect_agy() {
     return 1
   fi
   _agy_field st "$out" status || st='?'
-  echo "$provider/$model · $turns turn(s), status $st · no per-token cost ($provider bills as the plan's quota)"
-  echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)."
+  local secs=0 rate=''
+  _agy_seconds secs "$out" || secs=0
+  # output tokens over the whole run (tool time included): what the rate feels like from outside
+  [ "$secs" -gt 0 ] && rate=", ~$(( (outt + th) / secs )) output tok/s over the run"
+  echo "$provider/$model · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
+  echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
   if [ "$st" != SUCCESS ]; then
     _agy_field err "$out" error || err=''
     echo "== the CLI reported an error =="

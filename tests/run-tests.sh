@@ -1634,7 +1634,7 @@ if [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then ok "and the
 case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=antigravity-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
 case "$(gsc status)" in *"exited(0)  $GW  antigravity-cli/gemini-3.8-flash-high"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
 COLL="$(gsc collect --worker "$GW")"
-case $COLL in *"stub work"*"1 turn(s), status SUCCESS"*"in 13051 (+20 cached), out 59 (+58 thinking)"*"Added done.txt"*"today: 1 run(s) on antigravity-cli"*)
+case $COLL in *"stub work"*"1 turn(s), status SUCCESS, 20s"*"in 13051 (+20 cached), out 59 (+58 thinking), ~5 output tok/s over the run"*"Added done.txt"*"today: 1 run(s) on antigravity-cli"*)
   ok "collect shows the commit, the turn and token counts from the envelope, the response, and today's runs" ;;
   *) bad "collect shows the commit, turns, tokens and the response" "$COLL" ;; esac
 COLL2="$(gsc collect --worker "$GW")"
