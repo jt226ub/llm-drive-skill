@@ -866,5 +866,16 @@ Three additions, all orchestrator-facing:
   provider's Orchestrator section stays what it was: roles, not mechanics. `status` now
   shows each worker's age.
 
+A busy model, same day: that session's worker ran on Gemini 3.8 Flash while the model was
+short of capacity. The CLI's own log showed fourteen `No capacity available` answers over
+half an hour, each retried by the CLI itself 4–7 s later and each succeeding by the second
+attempt, and the model label never changed — the CLI does not fall back to another model.
+None of that was visible from the sidecar, so every worker now gets its own CLI log
+(`--log-file $RUN/NAME.cli.log`), and `collect` and `wait`'s heartbeat report the model the
+CLI resolved and the count of capacity retries from it. The guide says what to do when a
+turn does end in "No capacity": `say` again, or a new `start` on `-medium` or Pro.
+
 Rejected: putting the guide into every prompt (the per-prompt cap exists for a reason);
-teaching the hook to detect a struggling session (nothing to detect it with).
+teaching the hook to detect a struggling session (nothing to detect it with); an automatic
+model fallback in the sidecar (the CLI already retries, and a silent switch would spend Pro's
+share of the quota without the orchestrator choosing it).

@@ -1603,6 +1603,11 @@ fi
 printf '%s\n' "$@" > "$AGY_ARGV"
 env > "$AGY_ENV"
 pwd > "$AGY_CWD"
+# --log-file: what the real CLI writes there (model label lines; capacity retries when AGY_STUB_BUSY is set)
+prev=''; for a in "$@"; do if [ "$prev" = --log-file ]; then
+  printf 'I0916 10:24:20.902867     1 model_config_manager.go:327] Propagating selected model override to backend: label="Gemini 3.8 Flash (High)"\n' > "$a"
+  [ -n "${AGY_STUB_BUSY:-}" ] && printf 'I0916 10:36:10.680103   395 run.go:389] Run: attempt 1 failed (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server), retrying in 4s\nI0916 10:40:16.629551   395 run.go:389] Run: attempt 2 failed (UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server), retrying in 7s\n' >> "$a"
+fi; prev=$a; done
 if [ -n "${AGY_STUB_SLEEP:-}" ]; then sleep "$AGY_STUB_SLEEP"; exit 0; fi
 if [ -n "${AGY_STUB_NOUSAGE:-}" ]; then
   printf '%s\n' '{"conversation_id":"c3","status":"ERROR","response":"","error":"quota exceeded for this window"}'
@@ -1768,6 +1773,14 @@ if [ "$WRC" = 0 ] && [ $(( $(date +%s) - T_W )) -lt 30 ]; then ok "and it came b
 case "$(gsc status)" in *"exited(0) "[0-9]*"m  $GWW"*) ok "status shows how long ago the worker started" ;; *) bad "status shows how long ago the worker started" "$(gsc status | head -2)" ;; esac
 gsc stop --worker "$GWW" >/dev/null
 case "$(gsc wait --worker nosuch)" in *"no worker called nosuch"*) ok "wait on an unknown worker refuses" ;; *) bad "wait on an unknown worker refuses" ;; esac
+export AGY_STUB_BUSY=1
+OUT="$(gsc start --provider antigravity-cli --task 'busy model')"; unset AGY_STUB_BUSY
+GWB=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+gsc wait --worker "$GWB" --timeout 30 >/dev/null
+case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"--log-file $SCHOME/.claude/sidecar-run/$GWB.cli.log"*) ok "the CLI is told to log into the worker's run files" ;; *) bad "the CLI is told to log into the worker's run files" "$(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-200)" ;; esac
+case "$(gsc collect --worker "$GWB")" in *'CLI log: model "Gemini 3.8 Flash (High)" · 2 capacity retries by the CLI (last at 10:40)'*) ok "collect reports the model the CLI resolved and its capacity retries" ;; *) bad "collect reports the model the CLI resolved and its capacity retries" "$(gsc collect --worker "$GWB" | grep 'CLI log')" ;; esac
+gsc stop --worker "$GWB" >/dev/null
+if [ ! -f "$SCHOME/.claude/sidecar-run/$GWB.cli.log" ]; then ok "stop removes the CLI log too"; else bad "stop removes the CLI log too"; fi
 case "$(gsc guide)" in *"Lifecycle, in order"*"S start --provider NAME"*"S wait --worker NAME"*"What refusals mean"*) ok "guide prints the lifecycle, the paths and the refusals" ;; *) bad "guide prints the lifecycle" "$(gsc guide | head -3)" ;; esac
 
 # D20: the next turn of a conversation, and the plan quota from the CLI's /usage panel.

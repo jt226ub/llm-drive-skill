@@ -475,6 +475,26 @@ _latest_reading() {
   eval "$1=\$__last"
 }
 
+# _agy_capacity VARNAME LOGFILE — one line from the CLI's own log for this run:
+# the model it actually resolved and how many times a call hit "No capacity"
+# (the CLI retries those itself, 4–7 s apart; the log is where that shows).
+# Empty when the log has nothing to say.
+_agy_capacity() {
+  local __f=$2 __labels __n __last __gave __out=''
+  [ -f "$__f" ] || return 1
+  __labels=$(grep -o 'label="[^"]*"' "$__f" 2>/dev/null | sort -u | sed 's/label=//' | tr '\n' ' ')
+  __n=$(grep -c 'No capacity available' "$__f" 2>/dev/null); __n=${__n:-0}
+  [ -n "$__labels" ] && __out="model ${__labels% }"
+  if [ "$__n" -gt 0 ]; then
+    __last=$(grep 'No capacity available' "$__f" | tail -n 1 | sed -n 's/^[IWE][0-9]* \([0-9:]*\)\.[0-9]* .*/\1/p')
+    __out="${__out:+$__out · }$__n capacity retries by the CLI${__last:+ (last at ${__last%:*})}"
+  fi
+  __gave=$(grep -c 'giving up after' "$__f" 2>/dev/null); __gave=${__gave:-0}
+  [ "$__gave" -gt 0 ] && __out="${__out:+$__out · }the CLI gave up on a call"
+  [ -n "$__out" ] || return 1
+  eval "$1=\$__out"
+}
+
 # _quota_spent_at VARNAME PROVIDER — epoch of the newest quota-out mark, or 1.
 _quota_spent_at() {
   local __qts __qprov __qrest __qlast=''
@@ -920,7 +940,7 @@ _launch_agy() {
     # an API key in the environment would make the CLI bill it instead of the plan
     unset GEMINI_API_KEY GOOGLE_API_KEY
     cd "$__wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$__hooks" \
-      agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" ${__args[@]+"${__args[@]}"} \
+      agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" --log-file "$RUN/$__worker.cli.log" ${__args[@]+"${__args[@]}"} \
         < /dev/null > "$RUN/$__worker.out" 2> "$RUN/$__worker.err"
     echo $? > "$RUN/$__worker.rc"
   ) < /dev/null > /dev/null 2>&1 &
@@ -1061,7 +1081,7 @@ cmd_wait() {
   [ -n "$WORKER" ] || die "wait needs --worker NAME."
   local f="$RUN/$WORKER.env"
   [ -f "$f" ] || die "no worker called $WORKER. Try: sidecar.sh status"
-  local harness=claude pid='' line t0 limit=${TIMEOUT:-$WAIT_DEFAULT_S} beat blob st=''
+  local harness=claude pid='' line t0 limit=${TIMEOUT:-$WAIT_DEFAULT_S} beat blob st='' cap=''
   while IFS= read -r line || [ -n "$line" ]; do
     case ${line%%=*} in harness) harness=${line#*=} ;; pid) pid=${line#*=} ;; esac
   done < "$f"
@@ -1084,7 +1104,7 @@ cmd_wait() {
     fi
     if [ $(( $(date +%s) - beat )) -ge "$WAIT_BEAT_S" ]; then
       beat=$(date +%s)
-      echo "$WORKER: running, $(( beat - t0 ))s so far$( [ -s "$RUN/$WORKER.err" ] && printf ' · stderr: %s' "$(tail -n 1 "$RUN/$WORKER.err" | cut -c1-120)" )"
+      echo "$WORKER: running, $(( beat - t0 ))s so far$( [ -s "$RUN/$WORKER.err" ] && printf ' · stderr: %s' "$(tail -n 1 "$RUN/$WORKER.err" | cut -c1-120)" )$( _agy_capacity cap "$RUN/$WORKER.cli.log" 2>/dev/null && printf ' · %s' "$cap" )"
     fi
     sleep 5
   done
@@ -1116,6 +1136,9 @@ Providers: --provider defaults to the one /sidecar-on named ($FLAG). Profiles: $
   claude harness (deepseek, kaggle-tpu): a Claude Code session you can also \`claude attach\`; bills money or session time.
   antigravity-cli harness: the CLI runs the turn and exits; --model picks among the profile's models= (Flash/Pro, efforts).
   A turn is bounded by the profile's print_timeout (2h); raise it there for tasks that build for longer.
+  Busy model: the CLI retries "No capacity" answers itself (4–7 s apart) and never switches model; collect and
+  wait report the count from its log. A turn that ends in ERROR "No capacity" is retried with say, or with
+  --model gemini-3.8-flash-medium / gemini-3.1-pro-high on a new start.
 
 What refusals mean:
   "sidecar mode is off"          run /sidecar-on NAME first
@@ -1293,6 +1316,8 @@ _collect_agy() {
   # output tokens over the whole run (tool time included): what the rate feels like from outside
   [ "$secs" -gt 0 ] && rate=", ~$(( (outt + th) / secs )) output tok/s over the run"
   echo "$provider/$model · conversation turn $turn · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
+  local cap=''
+  _agy_capacity cap "$RUN/$WORKER.cli.log" && echo "  CLI log: $cap"
   [ "$no_usage" = 0 ] && echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
   if [ "$st" != SUCCESS ]; then
     _agy_field err "$out" error || err=''
@@ -1337,7 +1362,7 @@ cmd_stop() {
     kill "$pid" 2>/dev/null
     echo "killed pid $pid"
   fi
-  rm -f "$RUN/$WORKER.out" "$RUN/$WORKER.err" "$RUN/$WORKER.rc" "$RUN/$WORKER.turns"
+  rm -f "$RUN/$WORKER.out" "$RUN/$WORKER.err" "$RUN/$WORKER.rc" "$RUN/$WORKER.turns" "$RUN/$WORKER.cli.log"
   # The guard directory holds only our pre-push and symlinks to the repo's own
   # hooks, so removing it takes nothing of the user's with it.
   rm -f "$RUN/$WORKER.hooks"/* 2>/dev/null
