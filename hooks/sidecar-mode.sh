@@ -35,6 +35,7 @@ else
   echo "SIDECAR MODE IS ON (provider $provider; no worker out; turn off with /sidecar-off). Rules of engagement for dispatching to $provider:"
 fi
 
+echo 'Commands ("$HOME/.claude/drive-sidecar/sidecar.sh"): start --provider NAME [--model SLUG] --task "..." · wait --worker NAME · collect --worker NAME · say --worker NAME --task "..." (Antigravity) · stop --worker NAME · spend · quota · guide (the full how-to)'
 rules="$PROVIDERS/$provider.rules.md"
 if [ -f "$rules" ]; then
   in=0; body=''

@@ -37,6 +37,15 @@ pre-existing day-counter drift, 253 vs 254); `/sidecar-on kaggle-tpu` run live s
 argument and wrote the flag; the installed hook printed the deepseek section on a dry run. The
 Kaggle provider's rules file is written by the Anthropic Sidecar launcher at READY, not shipped here.
 
+## Explicit usage after another session struggled — 2026-09-16 (D21)
+
+The Rise and Fall session's first sidecar use (transcript under `~/.claude/projects/-Volumes-…-Rise-and-Fall-Remake/`)
+read the script source to learn the commands, hit the quota reader's false "not signed in" (the CLI's sign-in banner
+during an overnight token refresh; fixed, tests added), and wrote its own pid-polling loops to learn when the turn had
+ended. Added: `wait --worker NAME [--timeout S]`, `guide`, a command line in the hook's output on every prompt, and a
+worker-age column in `status` (DESIGN §18). 404 tests pass; the day-counter drift remains. Its worker (`sidecar-102419`,
+a multi-hour C++ build task on Flash) was still running at the time of writing; the profile's `print_timeout=2h` bounds it.
+
 ## The Antigravity worker is an iterative loop, and its quota is readable — 2026-09-14 (D20)
 
 `say --worker NAME --task "…"` runs the next turn of an Antigravity worker's conversation in its worktree

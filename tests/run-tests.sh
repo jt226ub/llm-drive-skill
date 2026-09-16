@@ -1546,9 +1546,10 @@ assert_eq "" "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" "the sidecar 
 printf 'fix\n' > "$HHOME/.claude/sidecar-mode"
 HOOK_OUT="$(HOME="$HHOME" PATH="" /bin/bash "$ROOT/hooks/sidecar-mode.sh" 2>/dev/null)"
 assert_eq "SIDECAR MODE IS ON (provider fix; no worker out; turn off with /sidecar-off). Rules of engagement for dispatching to fix:
+Commands (\"\$HOME/.claude/drive-sidecar/sidecar.sh\"): start --provider NAME [--model SLUG] --task \"...\" · wait --worker NAME · collect --worker NAME · say --worker NAME --task \"...\" (Antigravity) · stop --worker NAME · spend · quota · guide (the full how-to)
 - first rule
-- second rule" "$HOOK_OUT" "on: the hook names the provider and injects its Orchestrator section (bare PATH, pure bash)"
-assert_eq "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Orchestrator; printf "%s\n" "$r"')" "$(printf '%s\n' "$HOOK_OUT" | tail -n +2)" \
+- second rule" "$HOOK_OUT" "on: the hook names the provider, lists the commands, and injects its Orchestrator section (bare PATH, pure bash)"
+assert_eq "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Orchestrator; printf "%s\n" "$r"')" "$(printf '%s\n' "$HOOK_OUT" | tail -n +3)" \
   "the hook's section reader agrees with sidecar.sh's on the same fixture"
 printf 'worker=w-42\n' > "$HHOME/.claude/sidecar-run/w-42.env"
 case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
@@ -1656,7 +1657,7 @@ if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$AGY_ENV" 2>/dev/null; then ok "th
 GUARD=$(sed -n 's/^GIT_CONFIG_VALUE_0=//p' "$AGY_ENV")
 if [ -x "$GUARD/pre-push" ] && ! "$GUARD/pre-push" 2>/dev/null; then ok "and the guard's pre-push refuses"; else bad "and the guard's pre-push refuses" "$GUARD"; fi
 case "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" in *"harness=antigravity-cli"*"pid="*"worktree=$GREPO_P/.claude/worktrees/$GW"*) ok "the run record carries harness, pid and worktree" ;; *) bad "the run record carries harness, pid and worktree" "$(cat "$SCHOME/.claude/sidecar-run/$GW.env")" ;; esac
-case "$(gsc status)" in *"exited(0)  $GW  antigravity-cli/gemini-3.8-flash-high"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
+case "$(gsc status)" in *"exited(0) "[0-9]*"m  $GW  antigravity-cli/gemini-3.8-flash-high"*) ok "status reports the exited worker with its exit code" ;; *) bad "status reports the exited worker" "$(gsc status)" ;; esac
 COLL="$(gsc collect --worker "$GW")"
 case $COLL in *"stub work"*"1 turn(s), status SUCCESS, 20s"*"in 13051 (+20 cached), out 59 (+58 thinking), ~5 output tok/s over the run"*"Added done.txt"*"today: 1 run(s) on antigravity-cli"*)
   ok "collect shows the commit, the turn and token counts from the envelope, the response, and today's runs" ;;
@@ -1692,7 +1693,7 @@ if [ $(( $(date +%s) - T_START )) -lt 5 ]; then ok "start returns at once while 
 else bad "start returns at once while the worker runs on" "took $(( $(date +%s) - T_START )) s"; fi
 GW2=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
 sleep 0.5
-case "$(gsc status)" in *"live  $GW2  antigravity-cli/gemini-3.8-flash-high"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
+case "$(gsc status)" in *"live "[0-9]*"m  $GW2  antigravity-cli/gemini-3.8-flash-high"*) ok "a running CLI worker shows as live" ;; *) bad "a running CLI worker shows as live" "$(gsc status) | stub env: $(grep AGY_STUB "$AGY_ENV" 2>/dev/null || echo 'no AGY_STUB var') | argv: $(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-80)" ;; esac
 case "$(gsc collect --worker "$GW2")" in *"still running (pid"*) ok "collect on a running worker says so and prices nothing" ;; *) bad "collect on a running worker says so" ;; esac
 GPID=$(sed -n 's/^pid=//p' "$SCHOME/.claude/sidecar-run/$GW2.env")
 gsc stop --worker "$GW2" >/dev/null; sleep 0.5
@@ -1753,6 +1754,21 @@ GW7=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | he
 for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$SCHOME/.claude/sidecar-run/$GW7.rc" ] && break; sleep 0.5; done
 case "$(gsp collect --worker "$GW7")" in *"worktree: $SPREPO_P/.claude/worktrees/$GW7"*"stub work"*) ok "collect lists a worktree whose path contains a space (porcelain listing)" ;; *) bad "collect lists a worktree whose path contains a space" "start: $OUT | $(gsp collect --worker "$GW7" | head -4)" ;; esac
 gsp stop --worker "$GW7" >/dev/null
+
+# D21: wait blocks until a turn ends; guide prints the how-to; the hook carries the command line.
+export AGY_STUB_SLEEP=8
+OUT="$(gsc start --provider antigravity-cli --task 'slow')"; unset AGY_STUB_SLEEP
+GWW=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+T_W=$(date +%s); WOUT="$(gsc wait --worker "$GWW" --timeout 2)"; WRC=$?
+case $WOUT in *"still running after 2s"*) ok "wait returns 2 with 'still running' when the timeout passes first" ;; *) bad "wait returns 2 when the timeout passes first" "$WOUT (rc $WRC)" ;; esac
+[ "$WRC" = 2 ] && ok "and its exit code is 2" || bad "and its exit code is 2" "rc=$WRC"
+WOUT="$(gsc wait --worker "$GWW" --timeout 60)"; WRC=$?
+case $WOUT in *"turn ended after "*"s, status"*"collect --worker $GWW"*) ok "wait returns when the turn ends and names the next step" ;; *) bad "wait returns when the turn ends" "$WOUT" ;; esac
+if [ "$WRC" = 0 ] && [ $(( $(date +%s) - T_W )) -lt 30 ]; then ok "and it came back promptly (exit 0)"; else bad "and it came back promptly" "rc=$WRC after $(( $(date +%s) - T_W ))s"; fi
+case "$(gsc status)" in *"exited(0) "[0-9]*"m  $GWW"*) ok "status shows how long ago the worker started" ;; *) bad "status shows how long ago the worker started" "$(gsc status | head -2)" ;; esac
+gsc stop --worker "$GWW" >/dev/null
+case "$(gsc wait --worker nosuch)" in *"no worker called nosuch"*) ok "wait on an unknown worker refuses" ;; *) bad "wait on an unknown worker refuses" ;; esac
+case "$(gsc guide)" in *"Lifecycle, in order"*"S start --provider NAME"*"S wait --worker NAME"*"What refusals mean"*) ok "guide prints the lifecycle, the paths and the refusals" ;; *) bad "guide prints the lifecycle" "$(gsc guide | head -3)" ;; esac
 
 # D20: the next turn of a conversation, and the plan quota from the CLI's /usage panel.
 rm -f "$SCHOME/.claude/sidecar-quota" "$SCHOME/.claude/sidecar-quota-readings" "$SCHOME/.claude/sidecar-requests" "$AGY_ARGV"

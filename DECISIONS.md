@@ -781,3 +781,25 @@ the TPU and DeepSeek workers can).
 
 **Consequences.** Long pauses between turns cost a full re-send; the rules say so. A
 `spend` on a stale reading takes ~10 s. The onboarding consent stays the user's.
+
+## D21 — The mechanics are explicit: `wait`, `guide`, and a command line in every prompt
+
+**Date** 2026-09-16 · **Status** accepted
+
+**Context.** Another session's first use of the sidecar (its transcript, 2026-09-16)
+spent most of an hour on mechanics the rules of engagement never state: which commands
+exist and their exact flags, how to know when a worker's turn has ended, where the
+worktree is, what a refusal means. It also hit a false "not signed in" from the quota
+reader.
+
+**Decision.** `wait --worker NAME [--timeout S]` replaces hand-rolled pid loops; `guide`
+prints the one-screen how-to; the hook prints one command line under its header on
+every prompt; `status` shows worker age. The quota reader treats only the CLI's real
+login prompt as not signed in.
+
+**Rejected.** Injecting the full guide per prompt (cap); widening the Orchestrator
+sections with mechanics (they are per provider and capped at 15 lines; the mechanics are
+the same for all).
+
+**Consequences.** One more line in every prompt while the mode is on. `wait` is bounded
+and never silent longer than a minute.

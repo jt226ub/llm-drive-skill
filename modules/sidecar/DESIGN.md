@@ -841,3 +841,30 @@ Rejected: the long-lived `--input-format stream-json` process (it delivered a tu
 result one turn late twice in scratch); summarise-and-restart follow-ups (both Gemini
 models' fallback design; unnecessary once cache reads were measured); reading quota
 from the CLI's log or cache files (there is nothing there).
+
+## 18. Explicit usage: `wait`, `guide`, and the commands in every prompt — 2026-09-16
+
+The first session other than the one that built this tried to use it and, by its own
+transcript, spent most of an hour rediscovering the mechanics: it read the profile and
+the script source to learn the commands, hit a false "not signed in" from the quota
+reader (fixed the same morning: the CLI's sign-in banner during a token refresh was
+being read as a missing login), and then wrote three different pid-polling loops of its
+own to learn when the worker's turn had ended. The rules of engagement told it what the
+provider is for and nothing about how to drive it.
+
+Three additions, all orchestrator-facing:
+
+- `wait --worker NAME [--timeout S]` blocks until the turn ends (default 30 minutes;
+  exit 2 with "still running" past the timeout; a heartbeat every minute with the CLI's
+  last stderr line), and says what to run next. For a Claude Code worker it watches
+  `claude agents` instead of a pid.
+- `guide` prints the how-to in one screen: the lifecycle in order with exact commands,
+  where the worktree and the run files are, how to write `--task`, the two harnesses,
+  the print timeout, and what each refusal means.
+- The sidecar-mode hook prints one line of commands under its header on every prompt,
+  ending with `guide`, so the mechanics are never more than one command away. The
+  provider's Orchestrator section stays what it was: roles, not mechanics. `status` now
+  shows each worker's age.
+
+Rejected: putting the guide into every prompt (the per-prompt cap exists for a reason);
+teaching the hook to detect a struggling session (nothing to detect it with).

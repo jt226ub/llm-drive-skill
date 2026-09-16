@@ -1050,19 +1050,96 @@ cmd_say() {
   echo "  collect: \"$SELF_DIR/sidecar.sh\" collect --worker $WORKER   (then the next say within ~2 min keeps the cache warm)"
 }
 
+# wait --worker NAME [--timeout S]: block until the worker's current turn ends
+# (D21). Orchestrators were hand-rolling pid-polling loops against the run
+# record; this is the one they meant. Exit 0 when the turn ended, 2 when the
+# timeout passed with the worker still running. A heartbeat line every minute
+# says it is still going, with the last line the CLI wrote to stderr.
+WAIT_DEFAULT_S=1800
+WAIT_BEAT_S=60
+cmd_wait() {
+  [ -n "$WORKER" ] || die "wait needs --worker NAME."
+  local f="$RUN/$WORKER.env"
+  [ -f "$f" ] || die "no worker called $WORKER. Try: sidecar.sh status"
+  local harness=claude pid='' line t0 limit=${TIMEOUT:-$WAIT_DEFAULT_S} beat blob st=''
+  while IFS= read -r line || [ -n "$line" ]; do
+    case ${line%%=*} in harness) harness=${line#*=} ;; pid) pid=${line#*=} ;; esac
+  done < "$f"
+  case $limit in ''|*[!0-9]*) die "--timeout takes whole seconds." ;; esac
+  t0=$(date +%s); beat=$t0
+  while :; do
+    if [ "$harness" = antigravity-cli ]; then
+      if [ -f "$RUN/$WORKER.rc" ] || ! kill -0 "$pid" 2>/dev/null; then
+        _agy_field st "$RUN/$WORKER.out" status 2>/dev/null || st='no envelope'
+        echo "$WORKER: turn ended after $(( $(date +%s) - t0 ))s, status $st. Next: \"$SELF_DIR/sidecar.sh\" collect --worker $WORKER"
+        return 0
+      fi
+    else
+      _agents blob
+      case $blob in *"\"name\": \"$WORKER\""*) ;; *) echo "$WORKER: the session is no longer listed by claude agents. Next: \"$SELF_DIR/sidecar.sh\" collect --worker $WORKER"; return 0 ;; esac
+    fi
+    if [ $(( $(date +%s) - t0 )) -ge "$limit" ]; then
+      echo "$WORKER: still running after ${limit}s. Wait again, or stop --worker $WORKER."
+      return 2
+    fi
+    if [ $(( $(date +%s) - beat )) -ge "$WAIT_BEAT_S" ]; then
+      beat=$(date +%s)
+      echo "$WORKER: running, $(( beat - t0 ))s so far$( [ -s "$RUN/$WORKER.err" ] && printf ' · stderr: %s' "$(tail -n 1 "$RUN/$WORKER.err" | cut -c1-120)" )"
+    fi
+    sleep 5
+  done
+}
+
+# guide: the orchestrator's how-to, in one screen (D21). The hook shows a
+# provider's rules of engagement; this is the mechanics those rules assume.
+cmd_guide() {
+  cat <<GUIDE
+SIDECAR — how a session dispatches work (S = "$SELF_DIR/sidecar.sh")
+
+Lifecycle, in order, from inside the git repository the work belongs to:
+  S start --provider NAME [--model SLUG] --task "..."   launch one worker; prints its name (sidecar-HHMMSS)
+  S wait --worker NAME [--timeout S]                   block until its turn ends (default 1800 s; exit 2 = still running)
+  S collect --worker NAME                              the branch's commits and diff stat, what it cost, what it said
+  S say --worker NAME --task "..."                     Antigravity only: the next turn of the same conversation
+  S stop --worker NAME                                 end it; the worktree and branch stay for review
+  S status | S spend | S quota [--provider NAME]       who is out; cost by provider; an Antigravity plan's two quota bars
+
+Where things are:
+  the worker's branch and worktree: <repo>/.claude/worktrees/NAME (branch NAME); review with git -C <that path> log/diff
+  its files: $RUN/NAME.{env,out,err,rc,turns}; its rules: $SELF_DIR/providers/NAME.rules.md
+
+Writing --task: the worker cannot see your conversation. Give it the files by path, the definition of done,
+  the exact test command, and the commit message. For Antigravity, the first --task carries all context;
+  later turns (say) only the new ask. A worker commits on its own branch and never pushes.
+
+Providers: --provider defaults to the one /sidecar-on named ($FLAG). Profiles: $SELF_DIR/providers/*.conf.
+  claude harness (deepseek, kaggle-tpu): a Claude Code session you can also \`claude attach\`; bills money or session time.
+  antigravity-cli harness: the CLI runs the turn and exits; --model picks among the profile's models= (Flash/Pro, efforts).
+  A turn is bounded by the profile's print_timeout (2h); raise it there for tasks that build for longer.
+
+What refusals mean:
+  "sidecar mode is off"          run /sidecar-on NAME first
+  "worker X is already out"      one at a time: collect it, then stop --worker X
+  "has reached its cap"          money (CAP_USD in $CONFIG), daily requests, plan quota at 0%, or a quota-out run in the last 5 h
+  "not signed in"                Antigravity: run \`agy\` once in a terminal and sign in with Google (a browser step)
+  "no profile at"                the provider name is not a file under $SELF_DIR/providers/
+GUIDE
+}
+
 cmd_status() {
   local f found=0 blob
   _agents blob
   for f in "$RUN"/*.env; do
     [ -f "$f" ] || continue
     found=1
-    local worker='' provider='' model='' repo='' pid='' line state=gone
+    local worker='' provider='' model='' repo='' pid='' started='' line state=gone age=''
     while IFS= read -r line || [ -n "$line" ]; do
       case ${line%%=*} in
         worker) worker=${line#*=} ;; provider) provider=${line#*=} ;;
-        model) model=${line#*=} ;; repo) repo=${line#*=} ;; pid) pid=${line#*=} ;;
+        model) model=${line#*=} ;; repo) repo=${line#*=} ;; pid) pid=${line#*=} ;; started) started=${line#*=} ;;
       esac
     done < "$f"
+    case $started in ''|*[!0-9]*) ;; *) age=" $(( ($(date +%s) - started) / 60 ))m" ;; esac
     if [ -n "$pid" ]; then
       if kill -0 "$pid" 2>/dev/null; then state=live
       elif [ -f "$RUN/$worker.rc" ]; then state="exited($(cat "$RUN/$worker.rc"))"
@@ -1070,7 +1147,7 @@ cmd_status() {
     else
       case $blob in *"\"name\": \"$worker\""*) state=live ;; esac
     fi
-    echo "$state  $worker  $provider/$model  $repo"
+    echo "$state$age  $worker  $provider/$model  $repo"
   done
   [ "$found" = 1 ] || echo "No workers."
   cmd_spend
@@ -1324,7 +1401,7 @@ cmd_off() {
 
 # ---------------------------------------------------------------------------
 
-TASK=''; WORKER=''; PROVIDER=''; MODEL=''; PERMISSION_MODE=auto
+TASK=''; WORKER=''; PROVIDER=''; MODEL=''; TIMEOUT=''; PERMISSION_MODE=auto
 CMD=${1:-}; shift 2>/dev/null || true
 while [ $# -gt 0 ]; do
   case $1 in
@@ -1332,6 +1409,7 @@ while [ $# -gt 0 ]; do
     --worker) WORKER=${2:-}; shift 2 ;;
     --provider) PROVIDER=${2:-}; shift 2 ;;
     --model) MODEL=${2:-}; shift 2 ;;
+    --timeout) TIMEOUT=${2:-}; shift 2 ;;
     --permission-mode) PERMISSION_MODE=${2:-}; shift 2 ;;
     *) die "unknown argument $1" ;;
   esac
@@ -1351,6 +1429,8 @@ fi
 case $CMD in
   start)   cmd_start ;;
   say)     cmd_say ;;
+  wait)    cmd_wait ;;
+  guide)   cmd_guide ;;
   quota)   cmd_quota ;;
   status)  cmd_status ;;
   collect) cmd_collect ;;
@@ -1362,6 +1442,7 @@ case $CMD in
   *) cat >&2 <<USAGE
 sidecar.sh start  --task TEXT [--provider NAME] [--model SLUG] [--permission-mode MODE]
 sidecar.sh say    --worker NAME --task TEXT   the next turn of an Antigravity worker's conversation
+sidecar.sh wait   --worker NAME [--timeout S]   block until the worker's turn ends
 sidecar.sh status
 sidecar.sh collect --worker NAME
 sidecar.sh stop    --worker NAME
@@ -1370,6 +1451,7 @@ sidecar.sh quota   [--provider NAME]   read an Antigravity profile's plan quota 
 sidecar.sh rules   [--provider NAME]   the provider's rules of engagement for the dispatching session
 sidecar.sh on      [--provider NAME]   what /sidecar-on runs: record the provider and switch the mode on
 sidecar.sh off
+sidecar.sh guide                        the orchestrator's how-to in one screen
 
 --provider defaults to the name /sidecar-on was given (the flag file), else deepseek.
 --model picks one of the slugs the profile's models= lists, for this run only.
