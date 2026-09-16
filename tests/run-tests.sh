@@ -1617,6 +1617,13 @@ if [ -n "${AGY_STUB_STDERR:-}" ]; then
   echo "Error: model quota exhausted (stderr)" >&2
   exit 1
 fi
+if [ -n "${AGY_STUB_CAPFAIL:-}" ]; then
+  # first call: the CLI gave up on the busy model; a call carrying the fallback model succeeds
+  case " $* " in *" --model $AGY_STUB_CAPFAIL "*) ;; *)
+    printf '%s\n' '{"conversation_id":"c4","status":"ERROR","response":"","error":"UNAVAILABLE (code 503): No capacity available for model gemini-3.8-flash-high on the server","duration_seconds":30.0,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}'
+    exit 1 ;;
+  esac
+fi
 if [ -n "${AGY_STUB_QUOTA:-}" ]; then
   printf '%s\n' '{"conversation_id":"c2","status":"ERROR","response":"","error":"model quota exhausted for this window; it refreshes at 18:00","duration_seconds":0.4,"num_turns":0,"usage":{"input_tokens":0,"output_tokens":0,"thinking_tokens":0,"cache_read_tokens":0,"total_tokens":0}}'
   exit 1
@@ -1781,6 +1788,22 @@ case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"--log-file $SCHOME/.claude/sidecar-run/
 case "$(gsc collect --worker "$GWB")" in *'CLI log: model "Gemini 3.8 Flash (High)" · 2 capacity retries by the CLI (last at 10:40)'*) ok "collect reports the model the CLI resolved and its capacity retries" ;; *) bad "collect reports the model the CLI resolved and its capacity retries" "$(gsc collect --worker "$GWB" | grep 'CLI log')" ;; esac
 gsc stop --worker "$GWB" >/dev/null
 if [ ! -f "$SCHOME/.claude/sidecar-run/$GWB.cli.log" ]; then ok "stop removes the CLI log too"; else bad "stop removes the CLI log too"; fi
+# a turn that ends in "No capacity" after the CLI's own retries runs once more on the profile's fallback_model
+export AGY_STUB_CAPFAIL=gemini-3.7-flash-high
+OUT="$(gsc start --provider antigravity-cli --task 'busy')"; unset AGY_STUB_CAPFAIL
+GWF=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+gsc wait --worker "$GWF" --timeout 30 >/dev/null
+case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"--model gemini-3.7-flash-high"*) ok "the turn was run again on the fallback model" ;; *) bad "the turn was run again on the fallback model" "$(tr '\n' ' ' < "$AGY_ARGV" | cut -c1-200)" ;; esac
+COLLF="$(gsc collect --worker "$GWF")"
+case $COLLF in *"status SUCCESS"*"FALLBACK: capacity failure on gemini-3.8-flash-high; running this turn again on gemini-3.7-flash-high"*) ok "collect shows the successful turn and names the fallback" ;; *) bad "collect shows the successful turn and names the fallback" "$COLLF" ;; esac
+case $COLLF in *"QUOTA SPENT"*) bad "a capacity failure is not a quota-out" ;; *) ok "a capacity failure is not a quota-out" ;; esac
+gsc stop --worker "$GWF" >/dev/null
+export AGY_STUB_QUOTA=1
+OUT="$(gsc start --provider antigravity-cli --task 'quota')"; unset AGY_STUB_QUOTA
+GWQ=$(printf '%s\n' "$OUT" | sed -n 's/^worker \(sidecar-[0-9-]*\) .*/\1/p' | head -1)
+gsc wait --worker "$GWQ" --timeout 30 >/dev/null
+case "$(tr '\n' ' ' < "$AGY_ARGV")" in *"--model gemini-3.7-flash-high"*) bad "a non-capacity error is not retried on the fallback" ;; *) ok "a non-capacity error is not retried on the fallback" ;; esac
+gsc stop --worker "$GWQ" >/dev/null; rm -f "$SCHOME/.claude/sidecar-quota"
 case "$(gsc guide)" in *"Lifecycle, in order"*"S start --provider NAME"*"S wait --worker NAME"*"What refusals mean"*) ok "guide prints the lifecycle, the paths and the refusals" ;; *) bad "guide prints the lifecycle" "$(gsc guide | head -3)" ;; esac
 
 # D20: the next turn of a conversation, and the plan quota from the CLI's /usage panel.

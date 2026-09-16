@@ -802,4 +802,7 @@ sections with mechanics (they are per provider and capped at 15 lines; the mecha
 the same for all).
 
 **Consequences.** One more line in every prompt while the mode is on. `wait` is bounded
-and never silent longer than a minute.
+and never silent longer than a minute. Same day, at the user's request: a capacity
+fallback — a turn that ends in "No capacity" after the CLI's own retries runs once more on
+the profile's `fallback_model` (3.7 Flash for 3.8 Flash), named in `collect`; no other
+error is retried, and no silent fallback to Pro.

@@ -875,7 +875,16 @@ None of that was visible from the sidecar, so every worker now gets its own CLI 
 CLI resolved and the count of capacity retries from it. The guide says what to do when a
 turn does end in "No capacity": `say` again, or a new `start` on `-medium` or Pro.
 
+Fallback, at the user's request the same day: the profile names `fallback_model`
+(`gemini-3.7-flash-high` for the 3.8 default — `agy models` offers no 3.5 Flash; 3.5 Flash
+Lite is the CLI's title model), and when a turn ends in an ERROR envelope that says "No
+capacity" after the CLI's own retries, `_launch_agy` runs that turn once more on the
+fallback with the same prompt and conversation, writes a `sidecar: capacity failure …` line
+into the worker's `.err`, and `collect` prints it as FALLBACK. Any other error is not
+retried; a fallback equal to the requested model is ignored. The 3.7 Flash slugs are in
+`models=` so a session can also pick them outright.
+
 Rejected: putting the guide into every prompt (the per-prompt cap exists for a reason);
-teaching the hook to detect a struggling session (nothing to detect it with); an automatic
-model fallback in the sidecar (the CLI already retries, and a silent switch would spend Pro's
-share of the quota without the orchestrator choosing it).
+teaching the hook to detect a struggling session (nothing to detect it with); a silent
+fallback to Pro (it would spend the shared quota's expensive model without the orchestrator
+choosing it — the fallback stays within the Flash line and is always named in `collect`).

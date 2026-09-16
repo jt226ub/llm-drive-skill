@@ -13,7 +13,8 @@ front of the task the CLI receives. The rest of this file is documentation.
 - Send the next `say` within ~2 minutes of `collect`: the earlier turns are then read from
   cache (cheap quota); after ~10 minutes idle the whole conversation is re-sent at full price.
 - Gemini 3.8 Flash (default, at its highest reasoning effort): a fast non-interactive
-  coder for small and larger tasks. `-medium` / `-low` only to save quota.
+  coder for small and larger tasks. `-medium` / `-low` only to save quota. When 3.8 has
+  no capacity the CLI retries; if the turn still fails, it reruns on 3.7 Flash (collect says so).
 - Gemini 3.1 Pro (`--model gemini-3.1-pro-high`; `-low` only to save quota): a slower
   non-interactive coding expert — small and larger tasks, help with task and project
   planning, review, and brainstorming; the answer comes back in `collect` under "what it said".

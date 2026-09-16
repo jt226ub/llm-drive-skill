@@ -928,21 +928,35 @@ $worker_rules"
 # inherits the caller's stdout keeps a `$(sidecar.sh start …)` waiting until
 # the worker finishes (measured: 30 s for a 30 s stub), and an orchestrator
 # launching from a tool call would have hung with it.
+# FALLBACK (8th argument, from the profile's fallback_model): when the turn ends
+# in an ERROR envelope that says "No capacity", the CLI itself has already
+# retried and given up on the model, and the turn is run once more on the
+# fallback model — the same prompt and conversation — with a line in .err that
+# collect surfaces. Nothing else is retried.
 _launch_agy() {
   # __hooks, not __guard: _make_guard has a local of that name, and an eval into
   # a colliding name assigns the helper's local instead of ours.
-  local __v=$1 __worker=$2 __wt=$3 __model=$4 __timeout=$5 __prompt=$6 __cid=${7:-} __hooks
+  local __v=$1 __worker=$2 __wt=$3 __model=$4 __timeout=$5 __prompt=$6 __cid=${7:-} __fallback=${8:-} __hooks
   [ -d "$RUN/$__worker.hooks" ] && __hooks="$RUN/$__worker.hooks" || _make_guard __hooks "$__worker"
   local -a __args=()
-  [ "$__model" != auto ] && __args+=(--model "$__model")
   [ -n "$__cid" ] && __args+=(--conversation "$__cid")
+  [ "$__fallback" = "$__model" ] && __fallback=''
   (
     # an API key in the environment would make the CLI bill it instead of the plan
     unset GEMINI_API_KEY GOOGLE_API_KEY
-    cd "$__wt" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$__hooks" \
-      agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" --log-file "$RUN/$__worker.cli.log" ${__args[@]+"${__args[@]}"} \
-        < /dev/null > "$RUN/$__worker.out" 2> "$RUN/$__worker.err"
-    echo $? > "$RUN/$__worker.rc"
+    cd "$__wt" || exit 1
+    export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0="$__hooks"
+    __m=(); [ "$__model" != auto ] && __m=(--model "$__model")
+    agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" --log-file "$RUN/$__worker.cli.log" ${__args[@]+"${__args[@]}"} ${__m[@]+"${__m[@]}"} \
+      < /dev/null > "$RUN/$__worker.out" 2> "$RUN/$__worker.err"
+    __rc=$?
+    if [ -n "$__fallback" ] && grep -q '"status":"ERROR"' "$RUN/$__worker.out" 2>/dev/null && grep -qi 'no capacity' "$RUN/$__worker.out"; then
+      echo "sidecar: capacity failure on $__model; running this turn again on $__fallback" >> "$RUN/$__worker.err"
+      agy -p "$__prompt" --output-format json --dangerously-skip-permissions --print-timeout "$__timeout" --log-file "$RUN/$__worker.cli.log" ${__args[@]+"${__args[@]}"} --model "$__fallback" \
+        < /dev/null > "$RUN/$__worker.out" 2>> "$RUN/$__worker.err"
+      __rc=$?
+    fi
+    echo $__rc > "$RUN/$__worker.rc"
   ) < /dev/null > /dev/null 2>&1 &
   local __pid=$!
   disown "$__pid" 2>/dev/null
@@ -961,10 +975,11 @@ AGY_SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
 # read that profile still has to find it.
 case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) [ -x "$HOME/.local/bin/agy" ] && PATH="$HOME/.local/bin:$PATH" ;; esac
 _start_agy() {
-  local profile=$1 model='' timeout=''
+  local profile=$1 model='' timeout='' fallback=''
   _conf model "$profile" model || model=auto
   [ -n "$MODEL" ] && model=$MODEL
   _conf timeout "$profile" print_timeout || timeout=2h
+  _conf fallback "$profile" fallback_model || fallback=''
   command -v agy >/dev/null 2>&1 || die "agy is not installed: curl -fsSL https://antigravity.google/cli/install.sh | bash, then run \`agy\` once to sign in."
   [ -f "$AGY_TOKEN" ] || die "not signed in to Antigravity CLI: $AGY_TOKEN is missing. Run \`agy\` once and sign in with Google; the worker cannot sign in for you."
   # The plan's quota is free; purchased AI credits are money. The CLI spends
@@ -1009,7 +1024,7 @@ $worker_rules"
 TASK:
 $TASK"
   local pid
-  _launch_agy pid "$worker" "$wt" "$model" "$timeout" "$prompt"
+  _launch_agy pid "$worker" "$wt" "$model" "$timeout" "$prompt" "" "$fallback"
   {
     echo "worker=$worker"
     echo "provider=$PROVIDER"
@@ -1052,13 +1067,14 @@ cmd_say() {
   _agy_field cid "$RUN/$WORKER.out" conversation_id || cid=''
   [ -n "$cid" ] || die "the last turn of $WORKER left no envelope with a conversation id ($RUN/$WORKER.out), so there is nothing to continue. Start a new worker."
   [ -d "$worktree" ] || die "the worktree $worktree is gone."
-  local timeout=''
+  local timeout='' fallback=''
   _conf timeout "$SELF_DIR/providers/$provider.conf" print_timeout || timeout=2h
+  _conf fallback "$SELF_DIR/providers/$provider.conf" fallback_model || fallback=''
   # the previous turn's envelope is kept for the record; the new run replaces .out/.err/.rc
   cat "$RUN/$WORKER.out" >> "$RUN/$WORKER.turns"
   rm -f "$RUN/$WORKER.collected" "$RUN/$WORKER.rc"
   local npid
-  _launch_agy npid "$WORKER" "$worktree" "$model" "$timeout" "$TASK" "$cid"
+  _launch_agy npid "$WORKER" "$worktree" "$model" "$timeout" "$TASK" "$cid" "$fallback"
   turns=$((turns + 1))
   {
     while IFS= read -r line || [ -n "$line" ]; do
@@ -1137,8 +1153,8 @@ Providers: --provider defaults to the one /sidecar-on named ($FLAG). Profiles: $
   antigravity-cli harness: the CLI runs the turn and exits; --model picks among the profile's models= (Flash/Pro, efforts).
   A turn is bounded by the profile's print_timeout (2h); raise it there for tasks that build for longer.
   Busy model: the CLI retries "No capacity" answers itself (4–7 s apart) and never switches model; collect and
-  wait report the count from its log. A turn that ends in ERROR "No capacity" is retried with say, or with
-  --model gemini-3.8-flash-medium / gemini-3.1-pro-high on a new start.
+  wait report the count from its log. If a turn still ends in ERROR "No capacity", the sidecar runs that turn
+  once more on the profile's fallback_model (3.7 Flash for 3.8 Flash) and collect says FALLBACK.
 
 What refusals mean:
   "sidecar mode is off"          run /sidecar-on NAME first
@@ -1318,6 +1334,7 @@ _collect_agy() {
   echo "$provider/$model · conversation turn $turn · $turns turn(s), status $st, ${secs}s · no per-token cost ($provider bills as the plan's quota)"
   local cap=''
   _agy_capacity cap "$RUN/$WORKER.cli.log" && echo "  CLI log: $cap"
+  grep -q '^sidecar: capacity failure' "$RUN/$WORKER.err" 2>/dev/null && echo "  FALLBACK: $(grep '^sidecar: capacity failure' "$RUN/$WORKER.err" | tail -n 1 | sed 's/^sidecar: //')"
   [ "$no_usage" = 0 ] && echo "  Tokens are still counted: in $inn (+$ca cached), out $outt (+$th thinking)$rate."
   if [ "$st" != SUCCESS ]; then
     _agy_field err "$out" error || err=''
