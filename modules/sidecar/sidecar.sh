@@ -937,6 +937,9 @@ _launch_agy() {
 # any other software, so the official CLI it is.
 AGY_TOKEN="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
 AGY_SETTINGS="$HOME/.gemini/antigravity-cli/settings.json"
+# The installer puts agy in ~/.local/bin and edits the shell profile; a session whose shell did not
+# read that profile still has to find it.
+case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) [ -x "$HOME/.local/bin/agy" ] && PATH="$HOME/.local/bin:$PATH" ;; esac
 _start_agy() {
   local profile=$1 model='' timeout=''
   _conf model "$profile" model || model=auto

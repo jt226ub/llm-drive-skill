@@ -41,6 +41,9 @@ def parse(screen):
 def drive():
     os.makedirs(QUOTA_DIR, exist_ok=True)
     env = {**os.environ, "TERM": "xterm-256color", "COLUMNS": "150", "LINES": "45"}
+    local_bin = os.path.join(os.path.expanduser("~"), ".local", "bin")     # where the installer puts agy; a session's shell may lack it
+    if local_bin not in env.get("PATH", "").split(":"):
+        env["PATH"] = local_bin + ":" + env.get("PATH", "")
     for k in ("GEMINI_API_KEY", "GOOGLE_API_KEY", "SSH_CONNECTION", "SSH_TTY"):
         env.pop(k, None)
     pid, fd = pty.fork()
@@ -90,7 +93,11 @@ def drive():
             return finish(3, "agy's first-run wizard is up (theme, data-use consent): finish it yourself by running `agy` once, then try again")
         if "Do you trust the contents" in text:
             os.write(fd, b"\r"); buf = ""; continue          # our own empty folder
-        if "Authentication required" in text or "not signed in" in text:
+        # Only the real login prompt means not signed in. The banner says "You are currently not
+        # signed in. Signing in..." for a second while a stored token is refreshed (seen 2026-09-16
+        # from another session, after the token had expired overnight), and bailing on that killed
+        # a CLI that was about to authenticate.
+        if "Authentication required" in text or "Please visit the URL" in text:
             return finish(4, "not signed in to Antigravity CLI: run `agy` once and sign in with Google")
         if "? for shortcuts" in text:
             break

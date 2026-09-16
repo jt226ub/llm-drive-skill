@@ -1585,7 +1585,8 @@ cat > "$SCSTUB/agy" <<'STUBEOF'
 #!/bin/bash
 if [ $# -eq 0 ]; then
   # interactive mode, as antigravity-quota.py drives it: a trust question, the prompt, /usage, /exit
-  case ${AGY_STUB_USAGE:-} in *"Terms of Service"*) printf '%s\n' "$AGY_STUB_USAGE"; sleep 5; exit 0 ;; esac   # the first-run wizard instead
+  case ${AGY_STUB_USAGE:-} in *"Terms of Service"*|*"Authentication required"*) printf '%s\n' "$AGY_STUB_USAGE"; sleep 5; exit 0 ;; esac   # the wizard, or a real login prompt, instead
+  printf 'Welcome to the Antigravity CLI. You are currently not signed in.\n Signing in...\n'   # the real banner while a token refreshes
   printf 'Accessing workspace: %s\nDo you trust the contents of this project?\n> Yes, I trust this folder\n' "$PWD"
   IFS= read -r line
   printf '  jt226ub@gmail.com (Google AI Pro)\n>\n? for shortcuts\n'
@@ -1811,6 +1812,9 @@ printf '%s antigravity-cli 42.0 0.00 100h 3h10m\n' "$(date +%s)" >> "$SCHOME/.cl
 case "$(gsc spend)" in *"CAP REACHED (the plan's 5-hour quota is at 0% (refresh 3h10m)); start refuses"*) ok "a fresh reading at 0% is the cap" ;; *) bad "a fresh reading at 0% is the cap" "$(gsc spend)" ;; esac
 case "$(gsc start --provider antigravity-cli --task x)" in *"5-hour quota is at 0%"*) ok "and start refuses on it" ;; *) bad "and start refuses on it" "$(gsc start --provider antigravity-cli --task x)" ;; esac
 printf '%s antigravity-cli 42.0 55.0 100h 3h10m\n' "$(( $(date +%s) - 700 ))" > "$SCHOME/.claude/sidecar-quota-readings"
+export AGY_STUB_USAGE="Authentication required. Please visit the URL to log in:
+  https://accounts.google.com/o/oauth2/auth?x=y"
+case "$(gsc quota --provider antigravity-cli 2>&1)" in *"not signed in to Antigravity CLI"*) ok "the reader reports a real login prompt as not signed in" ;; *) bad "the reader reports a real login prompt as not signed in" "$(gsc quota --provider antigravity-cli 2>&1)" ;; esac
 export AGY_STUB_USAGE="Terms of Service & Data Use
   > [x] Yes, I agree"
 case "$(gsc quota --provider antigravity-cli 2>&1)" in *"first-run wizard"*) ok "the reader stops at the CLI's first-run wizard instead of answering it" ;; *) bad "the reader stops at the CLI's first-run wizard instead of answering it" "$(gsc quota --provider antigravity-cli 2>&1)" ;; esac
