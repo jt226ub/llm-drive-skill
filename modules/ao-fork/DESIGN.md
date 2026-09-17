@@ -227,9 +227,11 @@ in a harness's own plugin format; rules do not.
 
 1. Fork `Untrivial-ai/agent-orchestrator` under the user's GitHub account; branch
    `fork/main`; CI as upstream (`go test ./...`, `golangci-lint`, frontend typecheck).
-2. Read #4218's merged shape; write the Antigravity capacity reader and its API route; wire
-   `ao agent ls` and the settings section. Verify with the live `/usage` screen and with a
-   fixture of its text (the sidecar's `tests/run-tests.sh` stub already carries one).
+2. **Done 2026-09-17** (`feat/agy-capacity`, PR on the fork): domain + port + adapter reader
+   (`agy -p /usage --output-format json`, keys scrubbed), coordinator mirroring the Codex one,
+   `GET/POST /api/v1/agents/agy/capacity[/ensure]`, Settings section beside Codex accounts,
+   eight locale catalogs; verified live (2.6 s, real plan numbers) and under the race
+   detector. Not done, deliberately: `ao agent ls` column, admission gate (§3 quota policy).
 3. Profiles: config struct, validation, `--profile`, rules layering (§5), the model picker
    percent. Verify by spawning `flash-coder` and `pro-expert` on the scratch project and
    reading the delivered `system.md`.
