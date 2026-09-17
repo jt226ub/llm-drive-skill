@@ -837,3 +837,34 @@ rules text, the quota reader and the fallback rule until the fork's steps are ve
 live. Rebases on upstream are a standing cost; every addition is a new file or a named
 seam to keep them cheap. Data-use consent in the CLI is never answered by the fork.
 
+## D23 — One contract, three layers, three-section rules files; roles re-cut for AO
+
+**Date** 2026-09-17 · **Status** accepted
+
+**Context.** Reviewing the contract and the rules files against how AO assembles a session's
+system prompt (role text first, one Project Rules slot, Publishing Scope and a guard last):
+the design note had the contract "first" at the wrong level; the contract's §3 (approval
+before pushing) collided with AO's worker role (push CI fixes on issue-backed work); the
+sidecar's roster split roles on interactivity, which AO's `ao send` erases; each provider's
+rules file mixed the role with sidecar mechanics, so the fork could not read the role
+without the mechanics; and the sidecar's own workers never received the contract at all.
+
+**Decision.** (1) The contract's Precedence names the harness's own role instructions, and
+§3 grants outward actions that standing role instructions already grant. (2) Inside AO's
+slot the order is contract, project rules, role rules. (3) Provider rules files carry three
+sections: `## Role` (harness-agnostic, the user's words; the hook prints it before
+`## Orchestrator`; the fork's profiles read it), `## Orchestrator` (sidecar mechanics, under
+15 lines), `## Worker` (only what the provider needs beyond the contract). The launcher-written
+kaggle-tpu file has the same shape. (4) Both sidecar worker briefs carry the contract between
+the hand-off brief and the Worker rules. (5) Roles re-cut: orchestrator (Claude Code),
+flash-coder, pro-expert, deepseek-expert, tpu-coder deferred.
+
+**Rejected.** Keeping "non-interactive" in the roster (false in AO); a separate copy of the
+role text for the fork (drift); dropping the contract from sidecar workers to save tokens
+(~1,500 tokens, cached after the first turn).
+
+**Consequences.** Every sidecar worker start carries ~1,500 more tokens on its first turn.
+`sidecar.sh` reads the contract from the checkout or the installed skill and continues
+without it if neither exists. The Worker sections shrank to provider-specific lines, so the
+tests that looked for the old duplicated lines now look for the contract and the new lines.
+

@@ -38,17 +38,25 @@ fi
 echo 'Commands ("$HOME/.claude/drive-sidecar/sidecar.sh"): start --provider NAME [--model SLUG] --task "..." · wait --worker NAME · collect --worker NAME · say --worker NAME --task "..." (Antigravity) · stop --worker NAME · spend · quota · guide (the full how-to)'
 rules="$PROVIDERS/$provider.rules.md"
 if [ -f "$rules" ]; then
-  in=0; body=''
-  while IFS= read -r line || [ -n "$line" ]; do
-    if [ "$in" = 1 ]; then
-      case $line in "## "*) break ;; esac
-      body="$body$line"$'\n'
-    elif [ "$line" = "## Orchestrator" ]; then
-      in=1
-    fi
-  done < "$rules"
-  while [ "${body#$'\n'}" != "$body" ]; do body=${body#$'\n'}; done
-  while [ "${body%$'\n'}" != "$body" ]; do body=${body%$'\n'}; done
+  # `## Role` (what the models are for, harness-agnostic) precedes `## Orchestrator`
+  # (the sidecar's own mechanics); a rules file without a Role section prints as before.
+  body=''
+  for want in "## Role" "## Orchestrator"; do
+    in=0; section=''
+    while IFS= read -r line || [ -n "$line" ]; do
+      if [ "$in" = 1 ]; then
+        case $line in "## "*) break ;; esac
+        section="$section$line"$'\n'
+      elif [ "$line" = "$want" ]; then
+        in=1
+      fi
+    done < "$rules"
+    while [ "${section#$'\n'}" != "$section" ]; do section=${section#$'\n'}; done
+    while [ "${section%$'\n'}" != "$section" ]; do section=${section%$'\n'}; done
+    [ -n "$section" ] || continue
+    body="$body$section"$'\n'
+  done
+  body=${body%$'\n'}
   if [ -n "$body" ]; then
     printf '%s\n' "$body"
   else

@@ -888,3 +888,17 @@ Rejected: putting the guide into every prompt (the per-prompt cap exists for a r
 teaching the hook to detect a struggling session (nothing to detect it with); a silent
 fallback to Pro (it would spend the shared quota's expensive model without the orchestrator
 choosing it — the fallback stays within the Flash line and is always named in `collect`).
+
+## 19. The contract rides with every worker; rules files grow a `## Role` — 2026-09-17 (D23)
+
+Until now a sidecar worker got the hand-off brief and the provider's `## Worker` lines, and
+those lines re-stated three Drive rules in miniature (stay on the task, run the tests you
+touch, report what changed). The AO fork needs the role text alone, without the sidecar's
+mechanics, so each rules file now has `## Role`, `## Orchestrator` and `## Worker`: the hook
+prints Role then Orchestrator on every prompt; `_contract_body` puts the Drive contract
+(frontmatter stripped, the checkout's copy or the installed skill) between the brief and the
+Worker lines for both harnesses; the Worker lines keep only what the provider needs beyond
+the contract (Antigravity: a plan or review goes in the final answer, quote test output;
+DeepSeek: compact replies because tokens are billed; TPU: the 503 rule). The launcher writes
+the kaggle-tpu file in the same shape. Cost: ~1,500 tokens on a worker's first turn.
+

@@ -1284,9 +1284,9 @@ if [ -f "$CLAUDE_ARGV" ]; then
     *) bad "the hand-off brief rides in the system prompt (prepending it left the session with an empty prompt)" "$ARGV" ;;
   esac
   case $ARGV in
-    *"--append-system-prompt"*"Do not push"*"Rules of engagement for deepseek-flash on deepseek:"*"Run the tests you touch"*)
-      ok "the provider's Worker rules follow the brief in the system prompt" ;;
-    *) bad "the provider's Worker rules follow the brief in the system prompt" "$ARGV" ;;
+    *"--append-system-prompt"*"Do not push"*"Verify before you claim"*"Rules of engagement for deepseek-flash on deepseek:"*"every token is billed"*)
+      ok "the Drive contract and then the provider's Worker rules follow the brief in the system prompt (D23)" ;;
+    *) bad "the Drive contract and then the provider's Worker rules follow the brief in the system prompt (D23)" "$ARGV" ;;
   esac
   # The guard that actually holds. GIT_CONFIG_* is inherited by any git process
   # however it is spelled, so unlike a permission rule it is not defeated by
@@ -1551,6 +1551,10 @@ Commands (\"\$HOME/.claude/drive-sidecar/sidecar.sh\"): start --provider NAME [-
 - second rule" "$HOOK_OUT" "on: the hook names the provider, lists the commands, and injects its Orchestrator section (bare PATH, pure bash)"
 assert_eq "$(rules_fn '_rules_section r "'"$RULES_FIX"'" Orchestrator; printf "%s\n" "$r"')" "$(printf '%s\n' "$HOOK_OUT" | tail -n +3)" \
   "the hook's section reader agrees with sidecar.sh's on the same fixture"
+printf '# t\n\n## Role\n\n- what it is for\n\n## Orchestrator\n\n- first rule\n\n## Worker\n- x\n' > "$HHOME/.claude/drive-sidecar/providers/fix.rules.md"
+assert_eq "- what it is for
+- first rule" "$(HOME="$HHOME" PATH="" /bin/bash "$ROOT/hooks/sidecar-mode.sh" 2>/dev/null | tail -n +3)" "a ## Role section is printed before ## Orchestrator (D23)"
+cp "$RULES_FIX" "$HHOME/.claude/drive-sidecar/providers/fix.rules.md"
 printf 'worker=w-42\n' > "$HHOME/.claude/sidecar-run/w-42.env"
 case "$(HOME="$HHOME" bash "$ROOT/hooks/sidecar-mode.sh")" in
   "SIDECAR MODE IS ON (provider fix; worker w-42 is out"*) ok "with a worker out, the header says so" ;;
@@ -1660,9 +1664,9 @@ if [ -d "$GREPO/.claude/worktrees/$GW" ] && git -C "$GREPO" branch --list "$GW" 
 else bad "a worktree on a branch named after the worker was created" "$(git -C "$GREPO" worktree list)"; fi
 assert_eq "$GREPO_P/.claude/worktrees/$GW" "$(cat "$AGY_CWD" 2>/dev/null)" "the CLI ran inside that worktree"
 GARGV=$(tr '\n' ' ' < "$AGY_ARGV" 2>/dev/null)
-case $GARGV in *"-p "*"Antigravity CLI headless inside a git worktree at $GREPO_P/.claude/worktrees/$GW "*"commit it on this branch and stop there"*"Rules of engagement for gemini-3.8-flash-high on antigravity-cli:"*"Commit on the current branch and stop"*"TASK: add done.txt and commit"*)
-  ok "the prompt carries the brief with the worktree's absolute path, the provider's Worker rules and the task, in that order" ;;
-  *) bad "the prompt carries the brief, the Worker rules and the task" "$GARGV" ;; esac
+case $GARGV in *"-p "*"Antigravity CLI headless inside a git worktree at $GREPO_P/.claude/worktrees/$GW "*"commit it on this branch and stop there"*"Verify before you claim"*"Rules of engagement for gemini-3.8-flash-high on antigravity-cli:"*"Quote the output of the tests"*"TASK: add done.txt and commit"*)
+  ok "the prompt carries the brief with the worktree's absolute path, the Drive contract, the provider's Worker rules and the task, in that order (D23)" ;;
+  *) bad "the prompt carries the brief, the contract, the Worker rules and the task" "$GARGV" ;; esac
 case $GARGV in *"--output-format json "*"--dangerously-skip-permissions "*"--print-timeout 2h"*) ok "headless flags: --output-format json, --dangerously-skip-permissions, --print-timeout from the profile" ;; *) bad "headless flags" "$GARGV" ;; esac
 case $GARGV in *"--model gemini-3.8-flash-high"*) ok "the profile's model reaches the CLI as --model" ;; *) bad "the profile's model reaches the CLI as --model" "$GARGV" ;; esac
 if grep -q 'GIT_CONFIG_KEY_0=core.hooksPath' "$AGY_ENV" 2>/dev/null; then ok "the push guard reaches the CLI's git through GIT_CONFIG_*"; else bad "the push guard reaches the CLI's git"; fi

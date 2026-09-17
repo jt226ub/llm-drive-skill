@@ -89,6 +89,25 @@ _rules_section() {
   eval "$1=\$__body"
 }
 
+# _contract_body VAR — the Drive contract's body (frontmatter stripped), the same text the
+# drive-mode hook injects (D23). Repo layout first (tests run from the checkout), then the
+# installed skill. A missing contract is not fatal: the worker gets the brief and rules alone.
+_contract_body() {
+  local __f __line __delims=0 __body=''
+  for __f in "$SELF_DIR/../../skills/drive/SKILL.md" "$HOME/.claude/skills/drive/SKILL.md"; do
+    [ -f "$__f" ] && break
+  done
+  [ -f "$__f" ] || return 1
+  while IFS= read -r __line || [ -n "$__line" ]; do
+    if [ "$__delims" -ge 2 ]; then __body="$__body$__line"$'\n'
+    elif [ "$__line" = "---" ]; then __delims=$((__delims + 1)); fi
+  done < "$__f"
+  while [ "${__body#$'\n'}" != "$__body" ]; do __body=${__body#$'\n'}; done
+  while [ "${__body%$'\n'}" != "$__body" ]; do __body=${__body%$'\n'}; done
+  [ -n "$__body" ] || return 1
+  eval "$1=\$__body"
+}
+
 # _agy_stats TURNS_VAR IN_VAR OUT_VAR CACHED_VAR THINK_VAR FILE — counts from
 # the one JSON envelope `agy -p … --output-format json` prints on exit:
 # `num_turns` and `usage.{input_tokens,output_tokens,cache_read_tokens,
@@ -841,6 +860,16 @@ Your work will be reviewed as a branch by the session that dispatched you, so co
   # Per-provider conduct, after the brief: what this particular model needs to
   # be told (how to pace itself, what it gets wrong). Optional — a provider with
   # no rules.md gets the brief alone.
+  # The Drive contract rides between the brief and the provider's rules (D23): the same
+  # operating contract the orchestrator works under, so a worker verifies before it claims
+  # and reports outcome first. The provider's Worker section then adds only what this
+  # provider needs beyond it.
+  local contract
+  if _contract_body contract; then
+    brief="$brief
+
+$contract"
+  fi
   local worker_rules
   if _rules_section worker_rules "$SELF_DIR/providers/$PROVIDER.rules.md" Worker; then
     brief="$brief
@@ -1012,6 +1041,13 @@ _start_agy() {
   # The worktree's absolute path is spelled out: the first live run searched the
   # whole home directory for a file that was two levels below its own cwd.
   local brief="You are running the official Antigravity CLI headless inside a git worktree at $wt (your working directory, on the branch $worker). Every file the task names is inside that directory; do not search or edit outside it. Your work will be reviewed as a branch by the session that dispatched you, so commit it on this branch and stop there. Do not push, do not merge into any other branch, do not switch branches. If you cannot finish, commit what you have and say what is left. Your final answer is the report the reviewer reads: what changed, what you ran and its result, what is left."
+  # The Drive contract, then the provider's Worker rules, then the task (D23).
+  local contract
+  if _contract_body contract; then
+    brief="$brief
+
+$contract"
+  fi
   local worker_rules
   if _rules_section worker_rules "$SELF_DIR/providers/$PROVIDER.rules.md" Worker; then
     brief="$brief

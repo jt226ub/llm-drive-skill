@@ -121,6 +121,22 @@ for real token counts is a later task, filed, not designed here.
 Spawn takes `--agent`, `--model`, `--mode`, `--kind`. There is no named bundle of these, so
 "Flash coder" is retyped per project and the rules text has one slot per role, not per model.
 
+**Roles, re-cut for AO (D23).** The sidecar's roster split on interactivity ("non-interactive"
+Flash and Pro, "interactive" DeepSeek and TPU). In AO every session takes a next turn by
+`ao send` (verified 2026-09-17: 26 s), so that axis is gone; what remains is what each model
+is for and what it costs:
+
+| profile | harness, model | role | cost rule |
+|---|---|---|---|
+| orchestrator | Claude Code, chat | the human-facing coordinator: AO's role text plus the contract | subscription windows |
+| flash-coder | Antigravity, Gemini 3.8 Flash high | default implementer for small and larger tasks | plan quota shared with Pro; falls back to 3.7 Flash on no capacity |
+| pro-expert | Antigravity, Gemini 3.1 Pro high | planning, review, brainstorming, hard bugs; also an AO reviewer harness | the same shared quota, spent on judgement not typing |
+| deepseek-expert | Claude Code on the DeepSeek endpoint | paid expert and second-opinion reviewer when the free arms are down or exhausted | per token, sparingly |
+| tpu-coder | deferred | | time, not tokens |
+
+Each profile's `rulesFile` is the `## Role` section of the provider's rules file in the LLM
+Drive Skill repository, so the sidecar and the fork read one text.
+
 **Fork.** A `profiles` map, project-level and with a user-level default file
 (`<data dir>/profiles.json`, project entries win by name):
 
@@ -193,23 +209,31 @@ coordination line, the PR conventions. The prompt is written to
 `<data dir>/prompts/<session>/system.md` and delivered per harness (for Agy, in the first
 prompt; 9.6 KB in the test, a cached prefix from the second turn on).
 
-**Fork.** The rules stack becomes three layers, each a file, concatenated in this order:
+**Fork.** AO's own role text is always first (its assembly is fixed: role, coordination line,
+PR conventions, container labels, then the Project Rules slot, then Publishing Scope and the
+confidentiality guard). Everything ours lives inside that slot, in this order:
 
 1. **The contract** — the body of `skills/drive/SKILL.md`, byte-identical to what the
-   Claude Code hook and the gateway path ship (the test suite already asserts those two are
-   identical; the fork adds the third). Global, from `<data dir>/rules/drive.md`, refreshed
-   by the LLM Drive Skill installer.
-2. **The project's rules** — upstream's `agentRules` / `agentRulesFile`, untouched.
-3. **The profile's rules** — the `rulesFile` from §3: the provider's role text
-   (`providers/antigravity-cli.rules.md` split per profile: the Flash paragraph for
-   `flash-coder`, the Pro paragraph for `pro-expert`; the DeepSeek file for its profile),
-   plus the mechanics that matter inside AO — how to reach the orchestrator, that the
-   session is one turn at a time, that the next turn arrives by `ao send`.
+   Claude Code hook, the gateway path and (since D23) the sidecar's worker briefs ship.
+   General "how to work" first; its own Precedence clause defers to what follows.
+2. **The project's rules** — upstream's `agentRules` / `agentRulesFile`, untouched (in the
+   fork's own repository that is the AGENTS.md pointer).
+3. **The role's rules** — the `## Role` section of the provider's rules file (D23), the most
+   specific and the last, so it also wins on recency.
+
+AO's Publishing Scope then closes the prompt, which settles the one real tension: the
+contract's §3 asks approval before pushing, AO's worker role pushes CI fixes on issue-backed
+work; the contract's wording (D23) names standing role instructions as the grant.
+
+Orchestrator sessions get the same three layers in AO's Project-Specific Orchestrator Rules
+slot, the third being the template's plan file — the roster in the user's words, which
+profile for which kind of task.
+
+Size: contract ~1,500 tokens, AO base ~2,400 (9.6 KB measured), rules a few hundred; about
+4,500 per session start, a cached prefix from the second turn on Antigravity.
 
 No per-harness generation step: AO already puts one system prompt in front of every harness
-it launches, which is the whole reason the contract is harness-agnostic. The wshobson-style
-"author once, generate per harness" pattern is only needed for skills and commands that live
-in a harness's own plugin format; rules do not.
+it launches, which is the whole reason the contract is harness-agnostic.
 
 ## 6. Out of scope now, kept in view
 

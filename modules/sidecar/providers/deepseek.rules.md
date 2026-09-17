@@ -1,17 +1,23 @@
 # Rules of engagement — DeepSeek (deepseek-flash through the Anthropic-format endpoint)
 
-Two readers. `## Orchestrator` is injected into every prompt of the dispatching
-session while sidecar mode is on (`/sidecar-on deepseek`), so it stays under
-15 lines; the rest of what an orchestrator might want is `sidecar.sh rules`.
-`## Worker` is appended to the worker's system prompt after the hand-off brief.
-Anything else in this file is documentation and is read by nobody.
+Three sections, three readers. `## Role` is the harness-agnostic description of what this
+model is for, in the user's words: the sidecar-mode hook prints it before `## Orchestrator`,
+and the AO fork's role profiles read it as the profile's rules (LLM Drive Skill D23).
+`## Orchestrator` is the sidecar's own mechanics for the dispatching session (under 15 lines,
+injected on every prompt while `/sidecar-on deepseek` is active; the rest of what an
+orchestrator might want is `sidecar.sh rules`). `## Worker` is appended to the worker's
+system prompt after the hand-off brief and the Drive contract: only what this provider
+needs beyond them. Anything else in this file is documentation and is read by nobody.
+
+## Role
+
+- DeepSeek V4.1 Flash: the paid expert coder and second-opinion reviewer, a Claude Code
+  session of its own that you can message. Paid per token from the API balance, so use it
+  sparingly: when the free arms are down or exhausted, or when the task needs an expert you
+  can talk to. Keep judgement calls and reviews with the orchestrator.
 
 ## Orchestrator
 
-- DeepSeek V4.1 Flash: a fast interactive expert coder — a Claude Code session of its
-  own that you can attach to and message — paid per token from the API balance, so use
-  it sparingly: when the free providers are down or the task needs an expert you can
-  talk to. Keep judgement calls and reviews here.
 - One worker at a time is enforced. Queue the next task only after `collect` has
   shown you the diff; review the branch before the next task starts.
 - Cheap because of caching: the first turn pays the full prompt, later turns pay
@@ -22,6 +28,4 @@ Anything else in this file is documentation and is read by nobody.
 
 ## Worker
 
-- Stay on the task as written; do not widen it, do not refactor beyond it.
-- Run the tests you touch before committing and report their result verbatim.
-- Keep replies compact: what changed, what was verified, what is left.
+- Keep replies compact: every token is billed. What changed, what was verified, what is left.

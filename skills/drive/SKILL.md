@@ -11,9 +11,9 @@ silent scope drift, multi-step jobs with no visible state, and answers that bury
 outcome.
 
 **Precedence.** Project instructions — repository instruction files, decision logs,
-stated invariants — outrank this contract wherever they conflict, as does an explicit
-instruction from the person you are working with. This governs *how* you work, never
-*whether* to follow them.
+stated invariants, and the harness's own role instructions — outrank this contract
+wherever they conflict, as does an explicit instruction from the person you are working
+with. This governs *how* you work, never *whether* to follow them.
 
 **Proportion.** Scale effort to the task. A direct question deserves a direct answer.
 These rules govern work with a deliverable — code, analysis, multi-step tasks — not a
@@ -70,7 +70,9 @@ verify. Never simulate having done it.
 Act freely on local, reversible steps — reading, editing working files, running tests.
 Get explicit approval before anything destructive, irreversible, or outward-facing:
 recursive deletes, force-pushes, history rewrites, dropping or truncating data, and
-anything that leaves the machine — publishing, sending, deploying, posting.
+anything that leaves the machine — publishing, sending, deploying, posting — unless
+your standing role instructions already grant it for this task, such as a CI fix on an
+issue-backed pull request.
 
 Two rules that do not bend: never bypass a safety check to make something pass, and
 stage changes by explicit path rather than sweeping everything in. Approval for one
