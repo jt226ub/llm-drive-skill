@@ -39,8 +39,8 @@ the fork.
   review and brainstorming, DeepSeek V4.1 Flash the paid interactive expert, Qwen on the TPU
   later. A profile's rules file is the provider's existing `*.rules.md`, not new prose.
 - **Quota is a reading, not a guess.** The only source for Antigravity's plan quota is the
-  CLI's own `/usage` screen (the sidecar's `antigravity-quota.py` reads it under a pty, ~12 s,
-  no model call). The fork reads the same screen the same way; nothing estimates it.
+  CLI's own `/usage` command; headless it answers as JSON in under a second (§2). Nothing
+  estimates it.
 - **Advisory by default, refusing by profile.** Upstream keeps Codex capacity out of launch
   admission. The fork does the same unless a profile says `refuseBelowPercent`, in which case
   a spawn is refused with a readable reason (the opaque-quota-error complaint is upstream
@@ -53,12 +53,12 @@ the fork.
 provider meter with `primary`/`secondary` windows of `usedPercent`, `windowDurationMinutes`,
 `resetsAt`), a coordinator in `service/agent/codex_capacity.go` (display TTL 2 min, read
 timeout 10 s, one read in flight per account, backoff on failure) and a port
-`ReadCapacity(ctx) (CodexCapacityObservation, error)` in `ports/codex_accounts.go`. Upstream
-merged a "provider-neutral subscription usage" change (#4218) after that; the first fork task
-is to read what it generalised and hang the Antigravity reader on it rather than on the Codex
-types. If it generalised nothing usable, the fork adds `domain/subscription_capacity.go` with
-the Codex bucket shape (it already is provider-neutral in fields) and a `CapacityReader`
-port that the Agy adapter implements.
+`ReadCapacity(ctx) (CodexCapacityObservation, error)` in `ports/codex_accounts.go`, merged in
+#4722. A provider-neutral quota pipeline with its own page (#4218) was rejected in review —
+"make the existing agent inventory/auth state the source of truth instead of independently
+discovering quota accounts" — so the fork does not build one: it adds a capacity snapshot in the
+Codex bucket shape (already provider-neutral in its fields) under `domain/`, a small port the
+Agy adapter implements, and a coordinator with the Codex one's TTL, single-flight and backoff.
 
 **Reader.** `adapters/agent/agy/capacity.go`: run `agy -p "/usage" --output-format json` with
 `GEMINI_API_KEY`/`GOOGLE_API_KEY` unset (found 2026-09-17 via the Omarchy plugin
