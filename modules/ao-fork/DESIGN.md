@@ -256,9 +256,13 @@ it launches, which is the whole reason the contract is harness-agnostic.
    `GET/POST /api/v1/agents/agy/capacity[/ensure]`, Settings section beside Codex accounts,
    eight locale catalogs; verified live (2.6 s, real plan numbers) and under the race
    detector. Not done, deliberately: `ao agent ls` column, admission gate (§3 quota policy).
-3. Profiles: config struct, validation, `--profile`, rules layering (§5), the model picker
-   percent. Verify by spawning `flash-coder` and `pro-expert` on the scratch project and
-   reading the delivered `system.md`.
+3. **Done 2026-09-17** (`feat/role-profiles`, PR #2 on the fork): `RoleProfile` on the
+   project config, `worker.profile` / `orchestrator.profile`, `ao spawn --profile`, the
+   daemon folds the profile before anything reads the config, the session persists its
+   profile (migration 0148), rules layered contract → project → profile from
+   `<data dir>/rules/contract.md`; verified live (`flash-coder` spawn: layered `system.md`,
+   `--model gemini-3.8-flash-high`, persisted row). Not done, deliberately: desktop settings
+   UI for profiles, the model-picker percent, reviewer profiles, a user-level profiles file.
 4. Templates: struct, `apply-template`, the settings picker.
 5. Quota admission (warn/refuse) and the capacity fallback rerun.
 6. Rebase on upstream `main`; repeat 2–5's checks.
