@@ -2,6 +2,8 @@
 
 ## ⇒ NEXT: **decide whether the sidecar earns its keep, before adding to it**
 
+2026-09-17, D22: the user chose to fork Agent Orchestrator (AO) — Antigravity quota, role profiles, workflow templates, Drive contract in every session; TPU deferred. `modules/ao-fork/DESIGN.md` is the design with the order of work; step 1 is the fork itself under the user's GitHub account. AO was tested live that day (unattended agy worker 75 s to commit, second turn 26 s).
+
 The module is built, installed and exercised against a live provider. Nothing in
 it is half-finished. What has *not* happened is a real piece of work being
 delegated and the result being good enough to merge — every run so far has been

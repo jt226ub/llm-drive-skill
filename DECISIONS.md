@@ -806,3 +806,34 @@ and never silent longer than a minute. Same day, at the user's request: a capaci
 fallback — a turn that ends in "No capacity" after the CLI's own retries runs once more on
 the profile's `fallback_model` (3.7 Flash for 3.8 Flash), named in `collect`; no other
 error is retried, and no silent fallback to Pro.
+
+## D22 — Fork Agent Orchestrator to carry the sidecar's policy into one app; TPU deferred
+
+**Date** 2026-09-17 · **Status** accepted
+
+**Context.** The user wants one app in which every harness (Claude Code, Codex, Antigravity,
+later others) runs visibly, agents talk to each other and to an orchestrator, and each
+endpoint's budget is tracked. Omnigent shows sub-agents live but its Antigravity harness is
+broken on agy ≥ 1.2 and it counts USD only. Agent Orchestrator (AO) was tested the same day
+against the Antigravity CLI on the plan account: an unattended worker committed in 75 s, a
+second turn by `ao send` in 26 s, sessions visible live, messaging harness-agnostic. AO
+already tracks Claude/Codex token usage and Codex subscription capacity upstream; it has no
+Antigravity plan quota, no named roles, no role-to-model templates, and no plugin seam for
+any of that (adapters compile into the daemon).
+
+**Decision.** Fork AO (`Untrivial-ai/agent-orchestrator`) and add, in this order: an
+Antigravity capacity reader from the CLI's `/usage` screen (the sidecar's method), role
+profiles (harness + model + permissions + mode + own rules file + fallback + quota policy),
+workflow templates binding profiles to the worker/orchestrator/reviewer slots, and the Drive
+contract as the first layer of every session's rules. Design: `modules/ao-fork/DESIGN.md`.
+
+**Rejected.** Adopting AO unforked (no quota, no roles); Omnigent (Antigravity broken, USD
+only); Orca/herdr (no roles, no budget, terminal-only); a new orchestrator of our own (the
+adapters and the app are the value, and they move fast upstream).
+
+**Consequences.** The Kaggle TPU provider and its time budget are explicitly out of scope
+for now (the user, 2026-09-17); the sidecar remains the CLI path and the reference for the
+rules text, the quota reader and the fallback rule until the fork's steps are verified
+live. Rebases on upstream are a standing cost; every addition is a new file or a named
+seam to keep them cheap. Data-use consent in the CLI is never answered by the fork.
+
