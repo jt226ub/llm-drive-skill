@@ -21,6 +21,7 @@ data directory:
 | who talks to whom | `ao send` is harness-agnostic; a worker's system prompt ends with the exact `ao send --session <orchestrator-id>` line; the orchestrator's prompt forbids writing to the pty directly; `ao` is pinned on every session's PATH |
 | upstream budget work | per-session token usage from Claude / Codex / Kimi native transcripts, a LiteLLM-derived USD catalog (`pricing/catalog/v1`), a usage summary API and page, Codex subscription capacity (5-hour and weekly windows, `near_limit` / `exhausted`, account switching), an open intake for quota-aware Claude → Codex fallback (#4918) |
 | forks | 1,670, none carrying any of this; the top ones by stars have ≤ 4 and are untouched mirrors |
+| prior art (2026-09-17) | no upstream issue or PR for Antigravity quota; the accepted pattern is the Codex capacity coordinator merged in #4722; the provider-neutral usage page (#4218) was rejected; the one public Antigravity quota reader (`asdfsnlr/omantigravity`, an Omarchy bar widget) uses `agy -p /usage --output-format json` |
 
 So the shape the sidecar built by hand — a Claude orchestrator, an Antigravity coder that runs
 turn by turn, per-task model choice, a quota gate — exists in AO with a live view of every
@@ -59,18 +60,27 @@ types. If it generalised nothing usable, the fork adds `domain/subscription_capa
 the Codex bucket shape (it already is provider-neutral in fields) and a `CapacityReader`
 port that the Agy adapter implements.
 
-**Reader.** `adapters/agent/agy/capacity.go`: start `agy` under a pty (`creack/pty` is
-already a daemon dependency, the terminal manager uses it) in a daemon-owned scratch
-workspace (`<data dir>/agy-capacity`, workspace trust answered once on first run, never the
-data-use wizard — that stays the user's, and the reader exits 3 on it exactly as the sidecar's
-script does), send `/usage`, parse the two groups the screen shows — **Gemini** (Flash and
-Pro) and **Claude / GPT** — each with a **weekly** bar (percent left, refresh in *h m*) and a
-**5-hour** bar, then quit. Map to buckets: `limitId gemini-weekly`, `gemini-5h`,
-`claude-gpt-weekly`, `claude-gpt-5h`; `usedPercent = 100 − left`; `resetsAt = now + refresh`.
-"Authentication required" / "Please visit the URL" → `unknown` with reason `not signed in`;
-the sign-in banner during the hourly token refresh is *not* that (the sidecar learned this
-the hard way, D21). Freshness TTL 10 min (the sidecar's `QUOTA_FRESH_S`), because a reading
-costs a process start, not quota.
+**Reader.** `adapters/agent/agy/capacity.go`: run `agy -p "/usage" --output-format json` with
+`GEMINI_API_KEY`/`GOOGLE_API_KEY` unset (found 2026-09-17 via the Omarchy plugin
+`asdfsnlr/omantigravity`, verified live: the slash command runs headless in under a second,
+no model call, no pty). The envelope's `command.data` is structured: `groups[]` (`name`
+"Gemini Models" / "Claude and GPT models", `description` naming the models) each with
+`buckets[]` of `id` (`gemini-weekly`, `gemini-5h`, `3p-weekly`, `3p-5h`), `window`
+(`weekly` / `5h`), `remaining_fraction` (0–1) and `reset_time` (RFC 3339). Map straight
+onto the Codex bucket shape: `usedPercent = 100 × (1 − remaining_fraction)`,
+`resetsAt = reset_time`, `windowDurationMinutes` 300 / 10080. `status` other than
+`SUCCESS`, or an `error` naming authentication → `unknown` with reason `not signed in`; the
+CLI's data-use wizard cannot appear in `-p` mode, so the reader never touches it. Display TTL
+2 min and single-flight reads exactly as the Codex coordinator (`service/agent/codex_capacity.go`),
+because upstream rejected a separate quota pipeline (#4218, closed: "make the existing agent
+inventory/auth state the source of truth") and its later Cursor and Kimi subscription-usage
+PRs (#4338, #4339, closed unmerged) were themselves written "matching the current Codex capacity
+pattern". `agy -p "/model" --output-format json` returns the CLI's current default model
+(`id`, `label`, `effort`) the same way, for the picker's default.
+
+The sidecar's own reader (`antigravity-quota.py`, a pty driving the interactive `/usage`
+screen, ~12 s) is superseded by the same command; switching it is a separate, later change in
+the sidecar.
 
 **Surfaces.**
 
