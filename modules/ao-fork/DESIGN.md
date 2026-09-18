@@ -261,8 +261,12 @@ it launches, which is the whole reason the contract is harness-agnostic.
    daemon folds the profile before anything reads the config, the session persists its
    profile (migration 0148), rules layered contract → project → profile from
    `<data dir>/rules/contract.md`; verified live (`flash-coder` spawn: layered `system.md`,
-   `--model gemini-3.8-flash-high`, persisted row). Not done, deliberately: desktop settings
-   UI for profiles, the model-picker percent, reviewer profiles, a user-level profiles file.
+   `--model gemini-3.8-flash-high`, persisted row). Same day, second commit: the desktop
+   project settings gained Worker/Orchestrator profile pickers on the Agents tab (a profile
+   satisfies the required-agent rule; the effective agent and model are shown) and a Profiles
+   tab of cards (name, agent, model, approval, rules file, env), verified by headless
+   snapshots against the scratch daemon. Not done, deliberately: the New Task profile picker,
+   the model-picker percent, reviewer profiles, a user-level profiles file.
 4. Templates: struct, `apply-template`, the settings picker.
 5. Quota admission (warn/refuse) and the capacity fallback rerun.
 6. Rebase on upstream `main`; repeat 2–5's checks.
